@@ -1,6 +1,7 @@
 export interface Note {
   id: string;
   text: string;
+  indent: number; // 0 | 1 | 2
   createdAt: string;
 }
 
