@@ -20,17 +20,21 @@ const BooksContext = createContext<BooksContextValue>({
 });
 
 export function BooksProvider({ children }: { children: React.ReactNode }) {
-  const { user } = useAuth();
+  const { user, loading: authLoading } = useAuth();
   const [books, setBooks] = useState<Book[]>([]);
-  const [loading, setLoading] = useState(false);
+  const [fetchingBooks, setFetchingBooks] = useState(false);
+
+  // True while auth is resolving OR while books are being fetched from Firestore
+  const loading = authLoading || fetchingBooks;
 
   useEffect(() => {
+    if (authLoading) return; // wait for auth to settle first
     if (!user) { setBooks([]); return; }
-    setLoading(true);
+    setFetchingBooks(true);
     fetchBooks(user.uid)
       .then(setBooks)
-      .finally(() => setLoading(false));
-  }, [user]);
+      .finally(() => setFetchingBooks(false));
+  }, [user, authLoading]);
 
   const upsertBook = useCallback(
     async (book: Book) => {
