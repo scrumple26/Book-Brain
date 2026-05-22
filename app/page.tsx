@@ -90,7 +90,7 @@ function TagInput({ tags, onChange }: { tags: string[]; onChange: (tags: string[
 export default function Library() {
   const router = useRouter();
   const { user, loading, signInError, signIn, signOut } = useAuth();
-  const { books, loading: booksLoading, upsertBook, removeBook } = useBooks();
+  const { books, loading: booksLoading, error: booksError, upsertBook, removeBook } = useBooks();
   const [showForm, setShowForm] = useState(false);
   const [title, setTitle] = useState("");
   const [author, setAuthor] = useState("");
@@ -181,6 +181,15 @@ export default function Library() {
       </header>
 
       <main className="max-w-5xl mx-auto px-6 py-8">
+        {/* Firestore error banner */}
+        {booksError && (
+          <div className="mb-4 bg-red-50 border border-red-200 text-red-700 text-sm rounded-lg px-4 py-3">
+            <strong>Database error:</strong> {booksError}
+            <br />
+            <span className="text-xs text-red-500">Check your Firestore security rules in the Firebase Console.</span>
+          </div>
+        )}
+
         {/* Search */}
         <div className="mb-4">
           <input

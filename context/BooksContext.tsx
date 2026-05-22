@@ -8,6 +8,7 @@ import { useAuth } from "./AuthContext";
 interface BooksContextValue {
   books: Book[];
   loading: boolean;
+  error: string | null;
   upsertBook: (book: Book) => Promise<void>;
   removeBook: (bookId: string) => Promise<void>;
 }
@@ -15,6 +16,7 @@ interface BooksContextValue {
 const BooksContext = createContext<BooksContextValue>({
   books: [],
   loading: true,
+  error: null,
   upsertBook: async () => {},
   removeBook: async () => {},
 });
@@ -22,21 +24,27 @@ const BooksContext = createContext<BooksContextValue>({
 export function BooksProvider({ children }: { children: React.ReactNode }) {
   const { user, loading: authLoading } = useAuth();
   const [books, setBooks] = useState<Book[]>([]);
-  // Start true — stay true until auth resolves AND any Firestore fetch completes
   const [fetchingBooks, setFetchingBooks] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   const loading = authLoading || fetchingBooks;
 
   useEffect(() => {
-    if (authLoading) return; // auth hasn't settled yet
+    if (authLoading) return;
     if (!user) {
       setBooks([]);
       setFetchingBooks(false);
       return;
     }
     setFetchingBooks(true);
+    setError(null);
     fetchBooks(user.uid)
       .then(setBooks)
+      .catch((err) => {
+        const msg = err instanceof Error ? err.message : String(err);
+        setError(`Failed to load books: ${msg}`);
+        console.error("Firestore fetch error:", err);
+      })
       .finally(() => setFetchingBooks(false));
   }, [user, authLoading]);
 
@@ -47,7 +55,13 @@ export function BooksProvider({ children }: { children: React.ReactNode }) {
         const exists = prev.some((b) => b.id === book.id);
         return exists ? prev.map((b) => (b.id === book.id ? book : b)) : [book, ...prev];
       });
-      await saveBook(user.uid, book);
+      try {
+        await saveBook(user.uid, book);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        setError(`Failed to save: ${msg}`);
+        console.error("Firestore save error:", err);
+      }
     },
     [user]
   );
@@ -62,7 +76,7 @@ export function BooksProvider({ children }: { children: React.ReactNode }) {
   );
 
   return (
-    <BooksContext.Provider value={{ books, loading, upsertBook, removeBook }}>
+    <BooksContext.Provider value={{ books, loading, error, upsertBook, removeBook }}>
       {children}
     </BooksContext.Provider>
   );
