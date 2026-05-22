@@ -5,9 +5,9 @@ export const dynamic = "force-dynamic";
 import { useState, useEffect, useRef } from "react";
 import { useRouter, useParams } from "next/navigation";
 import { Book, Chapter, Note } from "@/lib/types";
-import { fetchBooks, saveBook } from "@/lib/firestore";
 import { generateId } from "@/lib/storage";
 import { useAuth } from "@/context/AuthContext";
+import { useBooks } from "@/context/BooksContext";
 
 function exportMarkdown(book: Book): void {
   const lines: string[] = [];
@@ -68,6 +68,7 @@ export default function BookPage() {
   const router = useRouter();
   const { id } = useParams<{ id: string }>();
   const { user, loading: authLoading } = useAuth();
+  const { books, loading: booksLoading, upsertBook } = useBooks();
 
   const [book, setBook] = useState<Book | null>(null);
   const [activeChapterId, setActiveChapterId] = useState<string | null>(null);
@@ -82,19 +83,18 @@ export default function BookPage() {
   const noteInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
-    if (authLoading || !user) return;
-    fetchBooks(user.uid).then((books) => {
-      const found = books.find((b) => b.id === id);
-      if (!found) { router.push("/"); return; }
-      setBook(found);
-      if (found.chapters.length > 0) setActiveChapterId(found.chapters[0].id);
-    });
-  }, [id, user, authLoading, router]);
+    if (authLoading || booksLoading) return;
+    if (!user) { router.push("/"); return; }
+    const found = books.find((b) => b.id === id);
+    if (!found) { router.push("/"); return; }
+    setBook(found);
+    setActiveChapterId((prev) => prev ?? found.chapters[0]?.id ?? null);
+  }, [id, user, authLoading, books, booksLoading, router]);
 
   async function persist(updated: Book) {
     if (!user) return;
     setBook(updated);
-    await saveBook(user.uid, updated);
+    await upsertBook(updated);
   }
 
   function addChapter() {
@@ -206,7 +206,7 @@ export default function BookPage() {
 
   const activeChapter = book?.chapters.find((c) => c.id === activeChapterId);
 
-  if (authLoading || !book) {
+  if (authLoading || booksLoading || !book) {
     return (
       <div className="min-h-screen bg-parchment-50 flex items-center justify-center">
         <p className="text-ink-300 text-sm">Loading…</p>

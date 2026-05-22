@@ -2,12 +2,12 @@
 
 export const dynamic = "force-dynamic";
 
-import { useState, useEffect, useRef } from "react";
+import { useState, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { Book } from "@/lib/types";
-import { fetchBooks, saveBook, deleteBook as deleteBookFS } from "@/lib/firestore";
 import { generateId } from "@/lib/storage";
 import { useAuth } from "@/context/AuthContext";
+import { useBooks } from "@/context/BooksContext";
 
 function SignInScreen({ onSignIn, error }: { onSignIn: () => void; error: string | null }) {
   return (
@@ -90,22 +90,13 @@ function TagInput({ tags, onChange }: { tags: string[]; onChange: (tags: string[
 export default function Library() {
   const router = useRouter();
   const { user, loading, signInError, signIn, signOut } = useAuth();
-  const [books, setBooks] = useState<Book[]>([]);
-  const [booksLoading, setBooksLoading] = useState(false);
+  const { books, loading: booksLoading, upsertBook, removeBook } = useBooks();
   const [showForm, setShowForm] = useState(false);
   const [title, setTitle] = useState("");
   const [author, setAuthor] = useState("");
   const [newTags, setNewTags] = useState<string[]>([]);
   const [search, setSearch] = useState("");
   const [activeTag, setActiveTag] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (!user) return;
-    setBooksLoading(true);
-    fetchBooks(user.uid)
-      .then(setBooks)
-      .finally(() => setBooksLoading(false));
-  }, [user]);
 
   function resetForm() {
     setTitle("");
@@ -124,17 +115,14 @@ export default function Library() {
       createdAt: new Date().toISOString(),
       chapters: [],
     };
-    // Close immediately, save in background
-    setBooks((prev) => [book, ...prev]);
     resetForm();
-    await saveBook(user.uid, book);
+    await upsertBook(book);
   }
 
   async function handleDeleteBook(id: string, e: React.MouseEvent) {
     e.stopPropagation();
-    if (!user || !confirm("Delete this book and all its notes?")) return;
-    setBooks((prev) => prev.filter((b) => b.id !== id));
-    await deleteBookFS(user.uid, id);
+    if (!confirm("Delete this book and all its notes?")) return;
+    await removeBook(id);
   }
 
   // All unique tags across all books
