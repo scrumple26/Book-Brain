@@ -9,12 +9,31 @@ import { generateId } from "@/lib/storage";
 import { useAuth } from "@/context/AuthContext";
 import { useBooks } from "@/context/BooksContext";
 
-// Per-level bullet styles
-const BULLET = ["•", "◦", "▸"] as const;
+const BULLET_CHAR = ["•", "◦", "▸"] as const;
 const BULLET_COLOR = ["text-amber-600", "text-ink-400", "text-ink-300"] as const;
 const INDENT_PX = [0, 20, 40] as const;
-// Markdown indent prefix per level
-const MD_PREFIX = ["- ", "  - ", "    - "] as const;
+const SPACES = ["", "  ", "    "] as const;
+
+// Calculate sequential numbers for numbered notes at each indent level.
+// Resets when a note at the same or shallower level uses a different type.
+function buildNumberMap(notes: Note[]): Map<string, number> {
+  const counters = [0, 0, 0];
+  const map = new Map<string, number>();
+  for (const note of notes) {
+    const lvl = Math.min(note.indent ?? 0, 2);
+    if ((note.type ?? "bullet") === "numbered") {
+      counters[lvl]++;
+      // Reset deeper levels when this level increments
+      for (let i = lvl + 1; i <= 2; i++) counters[i] = 0;
+      map.set(note.id, counters[lvl]);
+    } else {
+      // A bullet at this level resets the numbered counter at this level
+      counters[lvl] = 0;
+      for (let i = lvl + 1; i <= 2; i++) counters[i] = 0;
+    }
+  }
+  return map;
+}
 
 function exportMarkdown(book: Book): void {
   const lines: string[] = [];
@@ -24,9 +43,15 @@ function exportMarkdown(book: Book): void {
   for (const chapter of book.chapters) {
     lines.push(`## ${chapter.name}`);
     lines.push("");
+    const nums = buildNumberMap(chapter.notes);
     for (const note of chapter.notes) {
-      const level = Math.min(note.indent ?? 0, 2);
-      lines.push(`${MD_PREFIX[level]}${note.text}`);
+      const lvl = Math.min(note.indent ?? 0, 2);
+      const sp = SPACES[lvl];
+      if ((note.type ?? "bullet") === "numbered") {
+        lines.push(`${sp}${nums.get(note.id)}. ${note.text}`);
+      } else {
+        lines.push(`${sp}- ${note.text}`);
+      }
     }
     lines.push("");
   }
@@ -73,6 +98,7 @@ export default function BookPage() {
   const [search, setSearch] = useState("");
   const [noteInput, setNoteInput] = useState("");
   const [noteIndent, setNoteIndent] = useState(0);
+  const [noteType, setNoteType] = useState<"bullet" | "numbered">("bullet");
   const [chapterInput, setChapterInput] = useState("");
   const [addingChapter, setAddingChapter] = useState(false);
   const [editingChapterId, setEditingChapterId] = useState<string | null>(null);
@@ -80,6 +106,7 @@ export default function BookPage() {
   const [editingNoteId, setEditingNoteId] = useState<string | null>(null);
   const [editingNoteText, setEditingNoteText] = useState("");
   const [editingNoteIndent, setEditingNoteIndent] = useState(0);
+  const [editingNoteType, setEditingNoteType] = useState<"bullet" | "numbered">("bullet");
   const noteInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -126,6 +153,7 @@ export default function BookPage() {
       id: generateId(),
       text: noteInput.trim(),
       indent: noteIndent,
+      type: noteType,
       createdAt: new Date().toISOString(),
     };
     persist({ ...book, chapters: book.chapters.map((c) => c.id === activeChapterId ? { ...c, notes: [...c.notes, note] } : c) });
@@ -157,7 +185,7 @@ export default function BookPage() {
       ...book,
       chapters: book.chapters.map((c) =>
         c.id === chapterId
-          ? { ...c, notes: c.notes.map((n) => n.id === noteId ? { ...n, text: editingNoteText.trim(), indent: editingNoteIndent } : n) }
+          ? { ...c, notes: c.notes.map((n) => n.id === noteId ? { ...n, text: editingNoteText.trim(), indent: editingNoteIndent, type: editingNoteType } : n) }
           : c
       ),
     });
@@ -338,71 +366,96 @@ export default function BookPage() {
                   <p className="text-ink-300 text-sm italic">No notes yet. Add your first note below.</p>
                 ) : (
                   <ul className="space-y-1">
-                    {activeChapter.notes.map((note) => {
-                      const level = Math.min(note.indent ?? 0, 2);
-                      return (
-                        <li key={note.id} className="group flex items-start gap-2" style={{ paddingLeft: INDENT_PX[level] }}>
-                          <span className={`mt-1 flex-shrink-0 text-sm leading-tight select-none w-4 text-center ${BULLET_COLOR[level]}`}>
-                            {BULLET[level]}
-                          </span>
-                          {editingNoteId === note.id ? (
-                            <div className="flex-1 flex items-center gap-2">
-                              <input
-                                autoFocus
-                                type="text"
-                                value={editingNoteText}
-                                onChange={(e) => setEditingNoteText(e.target.value)}
-                                onKeyDown={(e) => {
-                                  if (e.key === "Tab") { e.preventDefault(); setEditingNoteIndent((i) => e.shiftKey ? Math.max(0, i - 1) : Math.min(2, i + 1)); }
-                                  if (e.key === "Enter") saveNoteEdit(activeChapter.id, note.id);
-                                  if (e.key === "Escape") setEditingNoteId(null);
-                                }}
-                                onBlur={() => saveNoteEdit(activeChapter.id, note.id)}
-                                className="flex-1 border border-amber-500 rounded px-2 py-0.5 text-sm text-ink-900 focus:outline-none bg-white"
-                              />
-                              <span className="text-xs text-ink-300 flex-shrink-0">
-                                L{editingNoteIndent + 1} · Tab↹
-                              </span>
-                            </div>
-                          ) : (
-                            <span className="flex-1 text-sm text-ink-800 leading-relaxed">{note.text}</span>
-                          )}
-                          {editingNoteId !== note.id && (
-                            <div className="flex gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0 mt-0.5">
-                              <button onClick={() => changeNoteIndent(activeChapter.id, note.id, -1)} disabled={level === 0}
-                                className="text-ink-300 hover:text-ink-700 disabled:opacity-20 text-xs px-1 py-0.5 rounded hover:bg-parchment-200" title="Outdent (Shift+Tab)">←</button>
-                              <button onClick={() => changeNoteIndent(activeChapter.id, note.id, 1)} disabled={level === 2}
-                                className="text-ink-300 hover:text-ink-700 disabled:opacity-20 text-xs px-1 py-0.5 rounded hover:bg-parchment-200" title="Indent (Tab)">→</button>
-                              <button onClick={() => { setEditingNoteId(note.id); setEditingNoteText(note.text); setEditingNoteIndent(level); }}
-                                className="text-ink-300 hover:text-ink-700 text-xs p-0.5">✎</button>
-                              <button onClick={() => deleteNote(activeChapter.id, note.id)}
-                                className="text-ink-300 hover:text-red-500 text-sm p-0.5 leading-none">×</button>
-                            </div>
-                          )}
-                        </li>
-                      );
-                    })}
+                    {(() => {
+                      const numMap = buildNumberMap(activeChapter.notes);
+                      return activeChapter.notes.map((note) => {
+                        const level = Math.min(note.indent ?? 0, 2);
+                        const isNumbered = (note.type ?? "bullet") === "numbered";
+                        const marker = isNumbered
+                          ? `${numMap.get(note.id)}.`
+                          : BULLET_CHAR[level];
+                        return (
+                          <li key={note.id} className="group flex items-start gap-2" style={{ paddingLeft: INDENT_PX[level] }}>
+                            <span className={`mt-0.5 flex-shrink-0 text-sm leading-tight select-none min-w-[1.25rem] text-right ${BULLET_COLOR[level]}`}>
+                              {marker}
+                            </span>
+                            {editingNoteId === note.id ? (
+                              <div className="flex-1 flex items-center gap-2">
+                                <button
+                                  onClick={() => setEditingNoteType((t) => t === "bullet" ? "numbered" : "bullet")}
+                                  className="flex-shrink-0 text-xs border border-parchment-300 rounded px-1.5 py-0.5 text-ink-500 hover:border-amber-500 hover:text-amber-600 transition-colors"
+                                  title="Toggle bullet / numbered"
+                                >
+                                  {editingNoteType === "numbered" ? "1." : "•"}
+                                </button>
+                                <input
+                                  autoFocus
+                                  type="text"
+                                  value={editingNoteText}
+                                  onChange={(e) => setEditingNoteText(e.target.value)}
+                                  onKeyDown={(e) => {
+                                    if (e.key === "Tab") { e.preventDefault(); setEditingNoteIndent((i) => e.shiftKey ? Math.max(0, i - 1) : Math.min(2, i + 1)); }
+                                    if (e.key === "Enter") saveNoteEdit(activeChapter.id, note.id);
+                                    if (e.key === "Escape") setEditingNoteId(null);
+                                  }}
+                                  onBlur={() => saveNoteEdit(activeChapter.id, note.id)}
+                                  className="flex-1 border border-amber-500 rounded px-2 py-0.5 text-sm text-ink-900 focus:outline-none bg-white"
+                                />
+                              </div>
+                            ) : (
+                              <span className="flex-1 text-sm text-ink-800 leading-relaxed">{note.text}</span>
+                            )}
+                            {editingNoteId !== note.id && (
+                              <div className="flex gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0 mt-0.5">
+                                <button onClick={() => changeNoteIndent(activeChapter.id, note.id, -1)} disabled={level === 0}
+                                  className="text-ink-300 hover:text-ink-700 disabled:opacity-20 text-xs px-1 py-0.5 rounded hover:bg-parchment-200" title="Outdent">←</button>
+                                <button onClick={() => changeNoteIndent(activeChapter.id, note.id, 1)} disabled={level === 2}
+                                  className="text-ink-300 hover:text-ink-700 disabled:opacity-20 text-xs px-1 py-0.5 rounded hover:bg-parchment-200" title="Indent">→</button>
+                                <button onClick={() => { setEditingNoteId(note.id); setEditingNoteText(note.text); setEditingNoteIndent(level); setEditingNoteType(note.type ?? "bullet"); }}
+                                  className="text-ink-300 hover:text-ink-700 text-xs p-0.5">✎</button>
+                                <button onClick={() => deleteNote(activeChapter.id, note.id)}
+                                  className="text-ink-300 hover:text-red-500 text-sm p-0.5 leading-none">×</button>
+                              </div>
+                            )}
+                          </li>
+                        );
+                      });
+                    })()}
                   </ul>
                 )}
               </div>
 
               {/* Note input */}
               <div className="px-8 py-4 border-t border-parchment-200 bg-parchment-50">
-                <div className="flex gap-3 items-center">
-                  {/* Indent level indicator */}
+                <div className="flex gap-2 items-center">
+                  {/* Bullet / Numbered toggle */}
+                  <div className="flex flex-shrink-0 border border-parchment-300 rounded-lg overflow-hidden text-xs font-medium">
+                    <button
+                      onClick={() => setNoteType("bullet")}
+                      className={`px-2.5 py-2 transition-colors ${noteType === "bullet" ? "bg-amber-600 text-white" : "text-ink-500 hover:bg-parchment-200"}`}
+                      title="Bullet list"
+                    >•</button>
+                    <button
+                      onClick={() => setNoteType("numbered")}
+                      className={`px-2.5 py-2 transition-colors border-l border-parchment-300 ${noteType === "numbered" ? "bg-amber-600 text-white" : "text-ink-500 hover:bg-parchment-200"}`}
+                      title="Numbered list"
+                    >1.</button>
+                  </div>
+
+                  {/* Indent level dots */}
                   <div className="flex flex-col gap-0.5 flex-shrink-0">
                     {[0, 1, 2].map((lvl) => (
-                      <button
-                        key={lvl}
-                        onClick={() => setNoteIndent(lvl)}
-                        title={`Level ${lvl + 1}`}
-                        className={`w-5 h-1.5 rounded-full transition-colors ${noteIndent === lvl ? "bg-amber-500" : "bg-parchment-300 hover:bg-parchment-400"}`}
+                      <button key={lvl} onClick={() => setNoteIndent(lvl)} title={`Level ${lvl + 1}`}
+                        className={`w-4 h-1.5 rounded-full transition-colors ${noteIndent === lvl ? "bg-amber-500" : "bg-parchment-300 hover:bg-parchment-400"}`}
                       />
                     ))}
                   </div>
+
                   <div className="flex-1 relative">
-                    <div className="absolute left-3 top-1/2 -translate-y-1/2 flex-shrink-0 pointer-events-none">
-                      <span className={`text-sm ${BULLET_COLOR[noteIndent]}`}>{BULLET[noteIndent]}</span>
+                    <div className="absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none">
+                      <span className={`text-sm ${BULLET_COLOR[noteIndent]}`}>
+                        {noteType === "numbered" ? "#." : BULLET_CHAR[noteIndent]}
+                      </span>
                     </div>
                     <input
                       ref={noteInputRef}
@@ -413,7 +466,7 @@ export default function BookPage() {
                         if (e.key === "Tab") { e.preventDefault(); setNoteIndent((i) => e.shiftKey ? Math.max(0, i - 1) : Math.min(2, i + 1)); }
                         if (e.key === "Enter") addNote();
                       }}
-                      placeholder={`Add a level ${noteIndent + 1} note… (Tab to indent)`}
+                      placeholder={`Add a ${noteType === "numbered" ? "numbered" : "bullet"} note… (Tab to indent)`}
                       className="w-full bg-white border border-parchment-300 rounded-lg pl-8 pr-4 py-2.5 text-sm text-ink-900 placeholder-ink-300 focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-transparent"
                     />
                   </div>
@@ -425,7 +478,7 @@ export default function BookPage() {
                     Add
                   </button>
                 </div>
-                <p className="text-xs text-ink-300 mt-1.5 pl-8">Tab = indent · Shift+Tab = outdent · Enter = add</p>
+                <p className="text-xs text-ink-300 mt-1.5 ml-20">Tab = indent · Shift+Tab = outdent · Enter = add</p>
               </div>
             </div>
           )}
