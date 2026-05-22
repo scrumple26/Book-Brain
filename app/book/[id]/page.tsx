@@ -231,6 +231,22 @@ export default function BookPage() {
               <h1 className="font-serif font-semibold text-ink-900 text-lg leading-tight truncate">{book.title}</h1>
               <p className="text-ink-300 text-xs italic truncate">{book.author}</p>
             </div>
+            <div className="flex items-center gap-1.5 flex-shrink-0 ml-2">
+              <label className="text-xs text-ink-300 whitespace-nowrap">Completed:</label>
+              <input
+                type="date"
+                value={book.dateCompleted ?? ""}
+                onChange={(e) => persist({ ...book, dateCompleted: e.target.value || undefined })}
+                className="text-xs border border-parchment-300 rounded px-2 py-1 text-ink-700 focus:outline-none focus:ring-1 focus:ring-amber-500 bg-white"
+              />
+              {book.dateCompleted && (
+                <button
+                  onClick={() => persist({ ...book, dateCompleted: undefined })}
+                  className="text-ink-300 hover:text-red-400 text-xs"
+                  title="Clear date"
+                >×</button>
+              )}
+            </div>
           </div>
           <div className="flex items-center gap-3 flex-shrink-0">
             <div className="relative">

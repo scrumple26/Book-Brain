@@ -17,6 +17,7 @@ export interface Book {
   title: string;
   author: string;
   tags: string[];
+  dateCompleted?: string; // ISO date string YYYY-MM-DD
   createdAt: string;
   chapters: Chapter[];
 }

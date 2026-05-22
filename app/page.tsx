@@ -95,6 +95,7 @@ export default function Library() {
   const [title, setTitle] = useState("");
   const [author, setAuthor] = useState("");
   const [newTags, setNewTags] = useState<string[]>([]);
+  const [dateCompleted, setDateCompleted] = useState("");
   const [search, setSearch] = useState("");
   const [activeTag, setActiveTag] = useState<string | null>(null);
 
@@ -102,6 +103,7 @@ export default function Library() {
     setTitle("");
     setAuthor("");
     setNewTags([]);
+    setDateCompleted("");
     setShowForm(false);
   }
 
@@ -112,6 +114,7 @@ export default function Library() {
       title: title.trim(),
       author: author.trim(),
       tags: newTags,
+      dateCompleted: dateCompleted || undefined,
       createdAt: new Date().toISOString(),
       chapters: [],
     };
@@ -283,6 +286,14 @@ export default function Library() {
                     {book.chapters.reduce((acc, c) => acc + c.notes.length, 0)} note
                     {book.chapters.reduce((acc, c) => acc + c.notes.length, 0) !== 1 ? "s" : ""}
                   </span>
+                  {book.dateCompleted && (
+                    <>
+                      <span>·</span>
+                      <span className="text-amber-600 font-medium">
+                        ✓ {new Date(book.dateCompleted + "T00:00:00").toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })}
+                      </span>
+                    </>
+                  )}
                 </div>
               </div>
             ))}
@@ -327,6 +338,17 @@ export default function Library() {
                   onKeyDown={(e) => e.key === "Enter" && addBook()}
                   placeholder="e.g. James Clear"
                   className="w-full border border-parchment-300 rounded-lg px-3 py-2.5 text-sm text-ink-900 placeholder-ink-300 focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-transparent"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-ink-500 uppercase tracking-wide mb-1.5">
+                  Date Completed <span className="normal-case text-ink-300 font-normal">(optional)</span>
+                </label>
+                <input
+                  type="date"
+                  value={dateCompleted}
+                  onChange={(e) => setDateCompleted(e.target.value)}
+                  className="w-full border border-parchment-300 rounded-lg px-3 py-2.5 text-sm text-ink-900 focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-transparent"
                 />
               </div>
               <div>
