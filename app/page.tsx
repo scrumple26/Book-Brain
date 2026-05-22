@@ -9,7 +9,7 @@ import { fetchBooks, saveBook, deleteBook as deleteBookFS } from "@/lib/firestor
 import { generateId } from "@/lib/storage";
 import { useAuth } from "@/context/AuthContext";
 
-function SignInScreen({ onSignIn }: { onSignIn: () => void }) {
+function SignInScreen({ onSignIn, error }: { onSignIn: () => void; error: string | null }) {
   return (
     <div className="min-h-screen bg-parchment-50 flex items-center justify-center">
       <div className="text-center max-w-sm px-6">
@@ -18,6 +18,11 @@ function SignInScreen({ onSignIn }: { onSignIn: () => void }) {
         <p className="text-ink-500 text-sm mb-8">
           Your personal book notes library. Sign in to get started.
         </p>
+        {error && (
+          <p className="text-red-500 text-xs bg-red-50 border border-red-200 rounded-lg px-4 py-3 mb-4 text-left break-words">
+            {error}
+          </p>
+        )}
         <button
           onClick={onSignIn}
           className="inline-flex items-center gap-3 bg-white border border-parchment-300 hover:border-amber-500 hover:shadow-md text-ink-800 text-sm font-medium px-6 py-3 rounded-xl transition-all"
@@ -49,7 +54,7 @@ function SignInScreen({ onSignIn }: { onSignIn: () => void }) {
 
 export default function Library() {
   const router = useRouter();
-  const { user, loading, signIn, signOut } = useAuth();
+  const { user, loading, signInError, signIn, signOut } = useAuth();
   const [books, setBooks] = useState<Book[]>([]);
   const [booksLoading, setBooksLoading] = useState(false);
   const [showForm, setShowForm] = useState(false);
@@ -96,7 +101,7 @@ export default function Library() {
     );
   }
 
-  if (!user) return <SignInScreen onSignIn={signIn} />;
+  if (!user) return <SignInScreen onSignIn={signIn} error={signInError} />;
 
   const filtered = books.filter(
     (b) =>

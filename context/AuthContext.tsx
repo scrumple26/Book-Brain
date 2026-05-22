@@ -7,6 +7,7 @@ import { getFirebaseAuth, getGoogleProvider } from "@/lib/firebase";
 interface AuthContextValue {
   user: User | null;
   loading: boolean;
+  signInError: string | null;
   signIn: () => Promise<void>;
   signOut: () => Promise<void>;
 }
@@ -14,6 +15,7 @@ interface AuthContextValue {
 const AuthContext = createContext<AuthContextValue>({
   user: null,
   loading: true,
+  signInError: null,
   signIn: async () => {},
   signOut: async () => {},
 });
@@ -21,6 +23,7 @@ const AuthContext = createContext<AuthContextValue>({
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
+  const [signInError, setSignInError] = useState<string | null>(null);
 
   useEffect(() => {
     const auth = getFirebaseAuth();
@@ -32,7 +35,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   async function handleSignIn() {
-    await signInWithPopup(getFirebaseAuth(), getGoogleProvider());
+    setSignInError(null);
+    try {
+      await signInWithPopup(getFirebaseAuth(), getGoogleProvider());
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setSignInError(msg);
+    }
   }
 
   async function handleSignOut() {
@@ -41,7 +50,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   return (
     <AuthContext.Provider
-      value={{ user, loading, signIn: handleSignIn, signOut: handleSignOut }}
+      value={{ user, loading, signInError, signIn: handleSignIn, signOut: handleSignOut }}
     >
       {children}
     </AuthContext.Provider>
