@@ -149,10 +149,12 @@ export default function BookPage() {
   const [editingNoteIndent, setEditingNoteIndent] = useState(0);
   const [editingNoteType, setEditingNoteType] = useState<"bullet" | "numbered">("bullet");
   const [listening, setListening] = useState(false);
+  const [polishing, setPolishing] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState<boolean>(() =>
     typeof window === "undefined" ? true : window.innerWidth >= 768
   );
   const noteInputRef = useRef<HTMLInputElement>(null);
+  const cameFromDictationRef = useRef(false);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const recognitionRef = useRef<any>(null);
 
@@ -182,6 +184,8 @@ export default function BookPage() {
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     rec.onresult = (e: any) => {
+      // Anything pushed by the recognizer is dictation; flag the next save for polish
+      cameFromDictationRef.current = true;
       let interim = "";
       for (let i = e.resultIndex; i < e.results.length; i++) {
         const transcript = e.results[i][0].transcript as string;
@@ -276,10 +280,38 @@ export default function BookPage() {
     setEditingChapterId(null);
   }
 
-  function addNote(textOverride?: string) {
+  async function polishWithGemini(raw: string): Promise<string> {
+    try {
+      const res = await fetch("/api/polish-note", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: raw }),
+      });
+      if (!res.ok) return raw;
+      const data = await res.json();
+      return typeof data?.text === "string" && data.text.trim() ? data.text.trim() : raw;
+    } catch {
+      return raw;
+    }
+  }
+
+  async function addNote(textOverride?: string) {
     if (!book || !activeChapterId) return;
-    const text = (textOverride ?? noteInput).trim();
+    const targetChapterId = activeChapterId;
+    let text = (textOverride ?? noteInput).trim();
     if (!text) return;
+
+    const fromDictation = cameFromDictationRef.current;
+    cameFromDictationRef.current = false;
+    setNoteInput("");
+    noteInputRef.current?.focus();
+
+    if (fromDictation) {
+      setPolishing(true);
+      text = await polishWithGemini(text);
+      setPolishing(false);
+    }
+
     const note: Note = {
       id: generateId(),
       text,
@@ -287,11 +319,20 @@ export default function BookPage() {
       type: noteType,
       createdAt: new Date().toISOString(),
     };
-    persist({ ...book, chapters: book.chapters.map((c) => c.id === activeChapterId ? { ...c, notes: [...c.notes, note] } : c) });
-    setNoteInput("");
-    // Keep same indent level for fast consecutive sub-point entry
-    noteInputRef.current?.focus();
+    // Use the freshest book in case other notes landed during the polish round-trip
+    const current = bookRef.current;
+    if (!current) return;
+    persist({
+      ...current,
+      chapters: current.chapters.map((c) =>
+        c.id === targetChapterId ? { ...c, notes: [...c.notes, note] } : c,
+      ),
+    });
   }
+
+  // Always-current book ref so async addNote isn't racing stale state
+  const bookRef = useRef(book);
+  useEffect(() => { bookRef.current = book; });
 
   // Keep an always-fresh reference so the speech callback never holds stale state
   const addNoteRef = useRef(addNote);
@@ -660,7 +701,12 @@ export default function BookPage() {
                       ref={noteInputRef}
                       type="text"
                       value={noteInput}
-                      onChange={(e) => setNoteInput(e.target.value)}
+                      onChange={(e) => {
+                        setNoteInput(e.target.value);
+                        // Manual typing while not dictating means the user is editing;
+                        // skip the polish round-trip on save.
+                        if (!listening) cameFromDictationRef.current = false;
+                      }}
                       onKeyDown={(e) => {
                         if (e.key === "Tab") { e.preventDefault(); setNoteIndent((i) => e.shiftKey ? Math.max(0, i - 1) : Math.min(2, i + 1)); }
                         if (e.key === "Enter") addNote();
@@ -692,7 +738,10 @@ export default function BookPage() {
                 </div>
                 <p className="text-xs text-ink-300 mt-1.5 ml-20">
                   Tab = indent · Shift+Tab = outdent · Enter = add
-                  {speechSupported && " · 🎤 = dictate · say \"period\" / \"comma\" / \"next\" / \"indent\" / \"outdent\""}
+                  {speechSupported && " · 🎤 = dictate · say \"next\" / \"indent\" / \"outdent\""}
+                  {polishing && (
+                    <span className="ml-2 text-amber-600 font-medium">✨ polishing…</span>
+                  )}
                 </p>
               </div>
             </div>
