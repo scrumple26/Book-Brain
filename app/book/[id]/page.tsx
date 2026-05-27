@@ -644,7 +644,7 @@ export default function BookPage() {
                     </button>
                   )}
                   <button
-                    onClick={addNote}
+                    onClick={() => addNote()}
                     disabled={!noteInput.trim()}
                     className="bg-amber-600 hover:bg-amber-500 disabled:opacity-40 disabled:cursor-not-allowed text-white text-sm font-medium px-4 py-2.5 rounded-lg transition-colors flex-shrink-0"
                   >
