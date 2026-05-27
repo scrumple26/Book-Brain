@@ -1,6 +1,6 @@
 import { initializeApp, getApps, FirebaseApp } from "firebase/app";
 import { Auth, getAuth, GoogleAuthProvider } from "firebase/auth";
-import { Firestore, getFirestore } from "firebase/firestore";
+import { Firestore, getFirestore, initializeFirestore } from "firebase/firestore";
 
 const firebaseConfig = {
   apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY,
@@ -28,7 +28,16 @@ export function getFirebaseAuth(): Auth {
 }
 
 export function getFirebaseDb(): Firestore {
-  if (!_db) _db = getFirestore(getApp());
+  if (!_db) {
+    // ignoreUndefinedProperties lets us write optional fields (e.g. dateCompleted,
+    // chapter.number) without first stripping undefined keys. Must be called before
+    // any other Firestore use; fall back to getFirestore on subsequent calls.
+    try {
+      _db = initializeFirestore(getApp(), { ignoreUndefinedProperties: true });
+    } catch {
+      _db = getFirestore(getApp());
+    }
+  }
   return _db;
 }
 

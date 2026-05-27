@@ -41,7 +41,8 @@ function exportMarkdown(book: Book): void {
   lines.push(`*${book.author}*`);
   lines.push("");
   for (const chapter of book.chapters) {
-    lines.push(`## ${chapter.name}`);
+    const chapterHeading = chapter.number ? `${chapter.number}. ${chapter.name}` : chapter.name;
+    lines.push(`## ${chapterHeading}`);
     lines.push("");
     const nums = buildNumberMap(chapter.notes);
     for (const note of chapter.notes) {
@@ -100,14 +101,85 @@ export default function BookPage() {
   const [noteIndent, setNoteIndent] = useState(0);
   const [noteType, setNoteType] = useState<"bullet" | "numbered">("bullet");
   const [chapterInput, setChapterInput] = useState("");
+  const [chapterNumberInput, setChapterNumberInput] = useState("");
   const [addingChapter, setAddingChapter] = useState(false);
   const [editingChapterId, setEditingChapterId] = useState<string | null>(null);
   const [editingChapterName, setEditingChapterName] = useState("");
+  const [editingChapterNumber, setEditingChapterNumber] = useState("");
   const [editingNoteId, setEditingNoteId] = useState<string | null>(null);
   const [editingNoteText, setEditingNoteText] = useState("");
   const [editingNoteIndent, setEditingNoteIndent] = useState(0);
   const [editingNoteType, setEditingNoteType] = useState<"bullet" | "numbered">("bullet");
+  const [listening, setListening] = useState(false);
   const noteInputRef = useRef<HTMLInputElement>(null);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const recognitionRef = useRef<any>(null);
+
+  const speechSupported =
+    typeof window !== "undefined" &&
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    !!((window as any).SpeechRecognition || (window as any).webkitSpeechRecognition);
+
+  // Stop any active recognition when the page unmounts
+  useEffect(() => () => recognitionRef.current?.stop?.(), []);
+
+  function toggleDictation() {
+    if (!speechSupported) return;
+    if (listening) {
+      recognitionRef.current?.stop?.();
+      return;
+    }
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    const rec = new SR();
+    rec.continuous = true;
+    rec.interimResults = true;
+    rec.lang = "en-US";
+
+    let baseText = noteInput.trimEnd();
+    let finalDictated = "";
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    rec.onresult = (e: any) => {
+      let interim = "";
+      for (let i = e.resultIndex; i < e.results.length; i++) {
+        const transcript = e.results[i][0].transcript as string;
+        if (e.results[i].isFinal) {
+          const trimmed = transcript.trim();
+          // Voice commands: pause-bounded single words trigger actions.
+          // Matching requires the word to be the entire finalized utterance,
+          // so mid-sentence uses ("the next page") don't trigger.
+          if (/^next[\s.,!?]*$/i.test(trimmed)) {
+            const noteText = [baseText, finalDictated].filter(Boolean).join(" ").trim();
+            if (noteText) addNoteRef.current(noteText);
+            baseText = "";
+            finalDictated = "";
+            setNoteInput("");
+            continue;
+          }
+          if (/^indent[\s.,!?]*$/i.test(trimmed)) {
+            setNoteIndent((i) => Math.min(2, i + 1));
+            continue;
+          }
+          if (/^out\s?dent[\s.,!?]*$/i.test(trimmed)) {
+            setNoteIndent((i) => Math.max(0, i - 1));
+            continue;
+          }
+          finalDictated += (finalDictated ? " " : "") + trimmed;
+        } else {
+          interim += transcript;
+        }
+      }
+      const combined = [baseText, finalDictated, interim.trim()].filter(Boolean).join(" ");
+      setNoteInput(combined);
+    };
+    rec.onerror = () => setListening(false);
+    rec.onend = () => setListening(false);
+
+    rec.start();
+    recognitionRef.current = rec;
+    setListening(true);
+  }
 
   useEffect(() => {
     if (authLoading || booksLoading) return;
@@ -126,11 +198,18 @@ export default function BookPage() {
 
   function addChapter() {
     if (!book || !chapterInput.trim()) return;
-    const chapter: Chapter = { id: generateId(), name: chapterInput.trim(), notes: [] };
+    const num = chapterNumberInput.trim();
+    const chapter: Chapter = {
+      id: generateId(),
+      name: chapterInput.trim(),
+      notes: [],
+      ...(num ? { number: num } : {}),
+    };
     const updated = { ...book, chapters: [...book.chapters, chapter] };
     persist(updated);
     setActiveChapterId(chapter.id);
     setChapterInput("");
+    setChapterNumberInput("");
     setAddingChapter(false);
   }
 
@@ -143,15 +222,25 @@ export default function BookPage() {
 
   function saveChapterName(chapterId: string) {
     if (!book || !editingChapterName.trim()) return;
-    persist({ ...book, chapters: book.chapters.map((c) => c.id === chapterId ? { ...c, name: editingChapterName.trim() } : c) });
+    const num = editingChapterNumber.trim();
+    persist({
+      ...book,
+      chapters: book.chapters.map((c) =>
+        c.id === chapterId
+          ? { ...c, name: editingChapterName.trim(), number: num || undefined }
+          : c
+      ),
+    });
     setEditingChapterId(null);
   }
 
-  function addNote() {
-    if (!book || !activeChapterId || !noteInput.trim()) return;
+  function addNote(textOverride?: string) {
+    if (!book || !activeChapterId) return;
+    const text = (textOverride ?? noteInput).trim();
+    if (!text) return;
     const note: Note = {
       id: generateId(),
-      text: noteInput.trim(),
+      text,
       indent: noteIndent,
       type: noteType,
       createdAt: new Date().toISOString(),
@@ -161,6 +250,10 @@ export default function BookPage() {
     // Keep same indent level for fast consecutive sub-point entry
     noteInputRef.current?.focus();
   }
+
+  // Keep an always-fresh reference so the speech callback never holds stale state
+  const addNoteRef = useRef(addNote);
+  useEffect(() => { addNoteRef.current = addNote; });
 
   function changeNoteIndent(chapterId: string, noteId: string, delta: number) {
     if (!book) return;
@@ -196,12 +289,13 @@ export default function BookPage() {
   if (book && search.trim()) {
     const q = search.toLowerCase();
     for (const chapter of book.chapters) {
+      const displayName = chapter.number ? `${chapter.number}. ${chapter.name}` : chapter.name;
       if (chapter.name.toLowerCase().includes(q)) {
-        searchResults.push({ chapterId: chapter.id, chapterName: chapter.name, matchType: "chapter" });
+        searchResults.push({ chapterId: chapter.id, chapterName: displayName, matchType: "chapter" });
       }
       for (const note of chapter.notes) {
         if (note.text.toLowerCase().includes(q)) {
-          searchResults.push({ chapterId: chapter.id, chapterName: chapter.name, noteId: note.id, noteText: note.text, matchType: "note" });
+          searchResults.push({ chapterId: chapter.id, chapterName: displayName, noteId: note.id, noteText: note.text, matchType: "note" });
         }
       }
     }
@@ -311,14 +405,21 @@ export default function BookPage() {
 
           {addingChapter && (
             <div className="px-3 pt-3">
-              <input autoFocus type="text" value={chapterInput} onChange={(e) => setChapterInput(e.target.value)}
-                onKeyDown={(e) => { if (e.key === "Enter") addChapter(); if (e.key === "Escape") setAddingChapter(false); }}
-                placeholder="Chapter name..."
-                className="w-full border border-parchment-300 rounded-lg px-3 py-2 text-sm text-ink-900 placeholder-ink-300 focus:outline-none focus:ring-2 focus:ring-amber-500 bg-white"
-              />
+              <div className="flex gap-1.5">
+                <input type="text" value={chapterNumberInput} onChange={(e) => setChapterNumberInput(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === "Enter") addChapter(); if (e.key === "Escape") setAddingChapter(false); }}
+                  placeholder="#"
+                  className="w-12 border border-parchment-300 rounded-lg px-2 py-2 text-sm text-ink-900 placeholder-ink-300 focus:outline-none focus:ring-2 focus:ring-amber-500 bg-white text-center"
+                />
+                <input autoFocus type="text" value={chapterInput} onChange={(e) => setChapterInput(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === "Enter") addChapter(); if (e.key === "Escape") setAddingChapter(false); }}
+                  placeholder="Chapter name..."
+                  className="flex-1 border border-parchment-300 rounded-lg px-3 py-2 text-sm text-ink-900 placeholder-ink-300 focus:outline-none focus:ring-2 focus:ring-amber-500 bg-white"
+                />
+              </div>
               <div className="flex gap-2 mt-2">
                 <button onClick={addChapter} disabled={!chapterInput.trim()} className="flex-1 bg-amber-600 disabled:opacity-40 text-white text-xs py-1.5 rounded-md">Add</button>
-                <button onClick={() => setAddingChapter(false)} className="flex-1 border border-parchment-300 text-ink-500 text-xs py-1.5 rounded-md">Cancel</button>
+                <button onClick={() => { setAddingChapter(false); setChapterNumberInput(""); setChapterInput(""); }} className="flex-1 border border-parchment-300 text-ink-500 text-xs py-1.5 rounded-md">Cancel</button>
               </div>
             </div>
           )}
@@ -330,24 +431,42 @@ export default function BookPage() {
             {book.chapters.map((chapter) => (
               <div key={chapter.id} className="group relative">
                 {editingChapterId === chapter.id ? (
-                  <div className="px-3 py-1">
+                  <div
+                    className="px-3 py-1 flex gap-1.5"
+                    onBlur={(e) => {
+                      if (!e.currentTarget.contains(e.relatedTarget as Node | null)) {
+                        saveChapterName(chapter.id);
+                      }
+                    }}
+                  >
+                    <input type="text" value={editingChapterNumber} onChange={(e) => setEditingChapterNumber(e.target.value)}
+                      onKeyDown={(e) => { if (e.key === "Enter") saveChapterName(chapter.id); if (e.key === "Escape") setEditingChapterId(null); }}
+                      placeholder="#"
+                      className="w-10 border border-amber-500 rounded px-1.5 py-1 text-sm text-ink-900 focus:outline-none bg-white text-center"
+                    />
                     <input autoFocus type="text" value={editingChapterName} onChange={(e) => setEditingChapterName(e.target.value)}
                       onKeyDown={(e) => { if (e.key === "Enter") saveChapterName(chapter.id); if (e.key === "Escape") setEditingChapterId(null); }}
-                      onBlur={() => saveChapterName(chapter.id)}
-                      className="w-full border border-amber-500 rounded px-2 py-1 text-sm text-ink-900 focus:outline-none bg-white"
+                      className="flex-1 border border-amber-500 rounded px-2 py-1 text-sm text-ink-900 focus:outline-none bg-white"
                     />
                   </div>
                 ) : (
                   <button onClick={() => setActiveChapterId(chapter.id)}
                     className={`w-full text-left px-4 py-2.5 text-sm transition-colors flex items-center justify-between gap-2 ${activeChapterId === chapter.id ? "bg-amber-600 text-white" : "text-ink-700 hover:bg-parchment-200"}`}
                   >
-                    <span className="truncate">{chapter.name}</span>
+                    <span className="truncate">
+                      {chapter.number && (
+                        <span className={`mr-1.5 font-medium ${activeChapterId === chapter.id ? "text-amber-100" : "text-ink-300"}`}>
+                          {chapter.number}.
+                        </span>
+                      )}
+                      {chapter.name}
+                    </span>
                     <span className={`text-xs flex-shrink-0 ${activeChapterId === chapter.id ? "text-amber-100" : "text-ink-300"}`}>{chapter.notes.length}</span>
                   </button>
                 )}
                 {editingChapterId !== chapter.id && (
                   <div className="absolute right-1 top-1/2 -translate-y-1/2 hidden group-hover:flex gap-0.5">
-                    <button onClick={() => { setEditingChapterId(chapter.id); setEditingChapterName(chapter.name); }}
+                    <button onClick={() => { setEditingChapterId(chapter.id); setEditingChapterName(chapter.name); setEditingChapterNumber(chapter.number ?? ""); }}
                       className={`p-1 rounded text-xs ${activeChapterId === chapter.id ? "text-amber-100 hover:text-white hover:bg-amber-500" : "text-ink-300 hover:text-ink-700 hover:bg-parchment-300"}`}>✎</button>
                     <button onClick={() => deleteChapter(chapter.id)}
                       className={`p-1 rounded text-xs ${activeChapterId === chapter.id ? "text-amber-100 hover:text-white hover:bg-amber-500" : "text-ink-300 hover:text-red-500 hover:bg-parchment-300"}`}>×</button>
@@ -372,7 +491,12 @@ export default function BookPage() {
           ) : (
             <div className="flex flex-col h-full">
               <div className="px-8 py-5 border-b border-parchment-200">
-                <h2 className="font-serif font-semibold text-ink-900 text-xl">{activeChapter.name}</h2>
+                <h2 className="font-serif font-semibold text-ink-900 text-xl">
+                  {activeChapter.number && (
+                    <span className="text-ink-300 mr-2">{activeChapter.number}.</span>
+                  )}
+                  {activeChapter.name}
+                </h2>
                 <p className="text-ink-300 text-xs mt-0.5">{activeChapter.notes.length} note{activeChapter.notes.length !== 1 ? "s" : ""}</p>
               </div>
 
@@ -486,6 +610,19 @@ export default function BookPage() {
                       className="w-full bg-white border border-parchment-300 rounded-lg pl-8 pr-4 py-2.5 text-sm text-ink-900 placeholder-ink-300 focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-transparent"
                     />
                   </div>
+                  {speechSupported && (
+                    <button
+                      onClick={toggleDictation}
+                      title={listening ? "Stop dictation" : "Dictate note"}
+                      className={`flex-shrink-0 text-sm px-3 py-2.5 rounded-lg transition-colors border ${
+                        listening
+                          ? "bg-red-500 hover:bg-red-400 text-white border-red-500 animate-pulse"
+                          : "bg-white text-ink-500 border-parchment-300 hover:border-amber-500 hover:text-amber-600"
+                      }`}
+                    >
+                      {listening ? "■" : "🎤"}
+                    </button>
+                  )}
                   <button
                     onClick={addNote}
                     disabled={!noteInput.trim()}
@@ -494,7 +631,10 @@ export default function BookPage() {
                     Add
                   </button>
                 </div>
-                <p className="text-xs text-ink-300 mt-1.5 ml-20">Tab = indent · Shift+Tab = outdent · Enter = add</p>
+                <p className="text-xs text-ink-300 mt-1.5 ml-20">
+                  Tab = indent · Shift+Tab = outdent · Enter = add
+                  {speechSupported && " · 🎤 = dictate · say \"next\" / \"indent\" / \"outdent\""}
+                </p>
               </div>
             </div>
           )}

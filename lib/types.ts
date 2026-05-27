@@ -9,6 +9,7 @@ export interface Note {
 export interface Chapter {
   id: string;
   name: string;
+  number?: string;
   notes: Note[];
 }
 
