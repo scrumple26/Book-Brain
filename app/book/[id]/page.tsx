@@ -111,6 +111,9 @@ export default function BookPage() {
   const [editingNoteIndent, setEditingNoteIndent] = useState(0);
   const [editingNoteType, setEditingNoteType] = useState<"bullet" | "numbered">("bullet");
   const [listening, setListening] = useState(false);
+  const [sidebarOpen, setSidebarOpen] = useState<boolean>(() =>
+    typeof window === "undefined" ? true : window.innerWidth >= 768
+  );
   const noteInputRef = useRef<HTMLInputElement>(null);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const recognitionRef = useRef<any>(null);
@@ -394,12 +397,28 @@ export default function BookPage() {
       )}
 
       <div className="flex flex-1 min-h-0 max-w-6xl mx-auto w-full">
-        {/* Sidebar */}
+        {/* Sidebar — collapsed: thin vertical tab; expanded: full chapter list */}
+        {!sidebarOpen ? (
+          <aside className="w-9 flex-shrink-0 border-r border-parchment-300 bg-parchment-100">
+            <button
+              onClick={() => setSidebarOpen(true)}
+              className="w-full h-full flex items-center justify-center hover:bg-parchment-200 transition-colors py-4"
+              title="Show chapters"
+            >
+              <span className="[writing-mode:vertical-rl] rotate-180 text-xs font-medium text-ink-500 uppercase tracking-wider whitespace-nowrap">
+                Chapters · {book.chapters.length}
+              </span>
+            </button>
+          </aside>
+        ) : (
         <aside className="w-64 flex-shrink-0 border-r border-parchment-300 bg-parchment-100 flex flex-col">
           <div className="p-4 border-b border-parchment-300">
             <div className="flex items-center justify-between">
               <span className="text-xs font-medium text-ink-300 uppercase tracking-wide">Chapters</span>
-              <button onClick={() => setAddingChapter(true)} className="text-amber-600 hover:text-amber-500 text-xl leading-none">+</button>
+              <div className="flex items-center gap-2">
+                <button onClick={() => setAddingChapter(true)} className="text-amber-600 hover:text-amber-500 text-xl leading-none" title="Add chapter">+</button>
+                <button onClick={() => setSidebarOpen(false)} className="text-ink-300 hover:text-ink-700 text-base leading-none" title="Hide chapters">«</button>
+              </div>
             </div>
           </div>
 
@@ -476,6 +495,7 @@ export default function BookPage() {
             ))}
           </nav>
         </aside>
+        )}
 
         {/* Main content */}
         <main className="flex-1 flex flex-col min-h-0 overflow-y-auto">
