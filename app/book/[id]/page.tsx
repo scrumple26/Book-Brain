@@ -88,6 +88,44 @@ function highlight(text: string, query: string): React.ReactNode {
   );
 }
 
+// Turn spoken punctuation words into glyphs, fix spacing, and auto-capitalize.
+// Idempotent: safe to apply repeatedly as more transcript text arrives.
+function normalizeDictation(text: string): string {
+  if (!text) return text;
+  // Order: longer phrases first so "exclamation point" beats "exclamation".
+  const subs: [RegExp, string][] = [
+    [/\bexclamation (point|mark)\b/gi, "!"],
+    [/\bquestion mark\b/gi, "?"],
+    [/\bfull stop\b/gi, "."],
+    [/\bopen (paren|parenthesis)\b/gi, "("],
+    [/\bclose (paren|parenthesis)\b/gi, ")"],
+    [/\bopen quote\b/gi, "\""],
+    [/\bclose quote\b/gi, "\""],
+    [/\bperiod\b/gi, "."],
+    [/\bcomma\b/gi, ","],
+    [/\bexclamation\b/gi, "!"],
+    [/\bsemicolon\b/gi, ";"],
+    [/\bcolon\b/gi, ":"],
+    [/\b(dash|hyphen)\b/gi, "-"],
+    [/\bapostrophe\b/gi, "'"],
+    [/\bquote\b/gi, "\""],
+  ];
+  let out = text;
+  for (const [re, repl] of subs) out = out.replace(re, repl);
+  // Remove space before closing punctuation / inside an opening paren
+  out = out.replace(/\s+([.,!?;:)])/g, "$1");
+  out = out.replace(/(\()\s+/g, "$1");
+  // Ensure a single space after sentence-ending punctuation when a letter follows
+  out = out.replace(/([.!?])\s*([A-Za-z])/g, "$1 $2");
+  // Capitalize the first letter of the whole string
+  out = out.replace(/^(\s*)([a-z])/, (_, ws, c) => ws + c.toUpperCase());
+  // Capitalize the letter after a sentence-ending punctuation
+  out = out.replace(/([.!?]\s+)([a-z])/g, (_, p, c) => p + c.toUpperCase());
+  // Collapse runs of spaces
+  out = out.replace(/ {2,}/g, " ");
+  return out;
+}
+
 export default function BookPage() {
   const router = useRouter();
   const { id } = useParams<{ id: string }>();
@@ -153,7 +191,8 @@ export default function BookPage() {
           // Matching requires the word to be the entire finalized utterance,
           // so mid-sentence uses ("the next page") don't trigger.
           if (/^next[\s.,!?]*$/i.test(trimmed)) {
-            const noteText = [baseText, finalDictated].filter(Boolean).join(" ").trim();
+            const raw = [baseText, finalDictated].filter(Boolean).join(" ").trim();
+            const noteText = normalizeDictation(raw);
             if (noteText) addNoteRef.current(noteText);
             baseText = "";
             finalDictated = "";
@@ -174,7 +213,7 @@ export default function BookPage() {
         }
       }
       const combined = [baseText, finalDictated, interim.trim()].filter(Boolean).join(" ");
-      setNoteInput(combined);
+      setNoteInput(normalizeDictation(combined));
     };
     rec.onerror = () => setListening(false);
     rec.onend = () => setListening(false);
@@ -653,7 +692,7 @@ export default function BookPage() {
                 </div>
                 <p className="text-xs text-ink-300 mt-1.5 ml-20">
                   Tab = indent · Shift+Tab = outdent · Enter = add
-                  {speechSupported && " · 🎤 = dictate · say \"next\" / \"indent\" / \"outdent\""}
+                  {speechSupported && " · 🎤 = dictate · say \"period\" / \"comma\" / \"next\" / \"indent\" / \"outdent\""}
                 </p>
               </div>
             </div>
