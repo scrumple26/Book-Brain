@@ -160,6 +160,7 @@ export default function BookPage() {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const recognitionRef = useRef<any>(null);
   const shouldListenRef = useRef(false);
+  const micStreamRef = useRef<MediaStream | null>(null);
 
   const speechSupported =
     typeof window !== "undefined" &&
@@ -176,10 +177,12 @@ export default function BookPage() {
 
   useEffect(() => { if (speechSupported) refreshMicDevices(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Stop any active recognition when the page unmounts
+  // Stop any active recognition and release mic when the page unmounts
   useEffect(() => () => {
     shouldListenRef.current = false;
     recognitionRef.current?.stop?.();
+    micStreamRef.current?.getTracks().forEach((t) => t.stop());
+    micStreamRef.current = null;
   }, []);
 
   function startRecognition(baseText: string, finalDictatedRef: { value: string }) {
@@ -236,6 +239,9 @@ export default function BookPage() {
         // Chrome kills continuous recognition after silence on desktop; restart automatically
         try { startRecognition(baseText, finalDictatedRef); return; } catch { /* fall through */ }
       }
+      // Truly done — release the mic stream
+      micStreamRef.current?.getTracks().forEach((t) => t.stop());
+      micStreamRef.current = null;
       setListening(false);
     };
 
@@ -248,16 +254,20 @@ export default function BookPage() {
     if (listening) {
       shouldListenRef.current = false;
       recognitionRef.current?.stop?.();
+      // mic stream released in onend after recognition fully stops
       return;
     }
     noteInputRef.current?.focus();
 
-    // Request mic permission and prime the selected device so Chrome uses it
+    // Open the mic first and keep the stream alive through the recognition session.
+    // On Windows/WASAPI, stopping the stream immediately and then starting Web Speech API
+    // causes a race where the mic is re-acquired before the OS finishes releasing it.
+    // Holding the stream open avoids that and also helps Chrome route the selected device.
     try {
       const audioConstraint = selectedMicId ? { deviceId: { ideal: selectedMicId } } : true;
       const stream = await navigator.mediaDevices.getUserMedia({ audio: audioConstraint });
-      stream.getTracks().forEach((t) => t.stop());
-      refreshMicDevices(); // re-enumerate now that labels are available
+      micStreamRef.current = stream; // held open until onend releases it
+      refreshMicDevices(); // labels now available since permission was just granted
     } catch {
       return; // permission denied or device unavailable — bail without turning on the button
     }
