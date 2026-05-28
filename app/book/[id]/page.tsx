@@ -194,6 +194,9 @@ export default function BookPage() {
   const [reformatting, setReformatting] = useState(false);
   const [reformatProgress, setReformatProgress] = useState("");
   const [awaitingChapterName, setAwaitingChapterName] = useState(false);
+  const [dragNoteId, setDragNoteId] = useState<string | null>(null);
+  const [dragOverNoteId, setDragOverNoteId] = useState<string | null>(null);
+  const [moveMenuNoteId, setMoveMenuNoteId] = useState<string | null>(null);
   const [micDevices, setMicDevices] = useState<MediaDeviceInfo[]>([]);
   const [selectedMicId, setSelectedMicId] = useState("");
   const [sidebarOpen, setSidebarOpen] = useState<boolean>(() =>
@@ -393,6 +396,13 @@ export default function BookPage() {
     el.style.height = "auto";
     el.style.height = el.scrollHeight + "px";
   }, [noteInput]);
+
+  useEffect(() => {
+    if (!moveMenuNoteId) return;
+    const handler = () => setMoveMenuNoteId(null);
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [moveMenuNoteId]);
 
   useEffect(() => {
     if (authLoading || booksLoading) return;
@@ -628,6 +638,34 @@ export default function BookPage() {
   function deleteNote(chapterId: string, noteId: string) {
     if (!book) return;
     persist({ ...book, chapters: book.chapters.map((c) => c.id === chapterId ? { ...c, notes: c.notes.filter((n) => n.id !== noteId) } : c) });
+  }
+
+  function reorderNote(chapterId: string, fromId: string, toId: string) {
+    if (!book || fromId === toId) return;
+    const chapter = book.chapters.find((c) => c.id === chapterId);
+    if (!chapter) return;
+    const notes = [...chapter.notes];
+    const fromIdx = notes.findIndex((n) => n.id === fromId);
+    const toIdx = notes.findIndex((n) => n.id === toId);
+    if (fromIdx === -1 || toIdx === -1) return;
+    const [moved] = notes.splice(fromIdx, 1);
+    notes.splice(toIdx, 0, moved);
+    persist({ ...book, chapters: book.chapters.map((c) => c.id === chapterId ? { ...c, notes } : c) });
+  }
+
+  function moveNoteToChapter(fromChapterId: string, noteId: string, toChapterId: string) {
+    if (!book || fromChapterId === toChapterId) return;
+    const note = book.chapters.find((c) => c.id === fromChapterId)?.notes.find((n) => n.id === noteId);
+    if (!note) return;
+    persist({
+      ...book,
+      chapters: book.chapters.map((c) => {
+        if (c.id === fromChapterId) return { ...c, notes: c.notes.filter((n) => n.id !== noteId) };
+        if (c.id === toChapterId) return { ...c, notes: [...c.notes, note] };
+        return c;
+      }),
+    });
+    setMoveMenuNoteId(null);
   }
 
   function saveNoteEdit(chapterId: string, noteId: string) {
@@ -937,8 +975,20 @@ export default function BookPage() {
                     const level = Math.min(note.indent ?? 0, 2);
                     const isNumbered = (note.type ?? "bullet") === "numbered";
                     const marker = isNumbered ? `${numMap.get(note.id)}.` : BULLET_CHAR[level];
+                    const isDragTarget = dragOverNoteId === note.id && dragNoteId !== note.id;
                     return (
-                      <li key={note.id} className={`group flex items-start gap-2${cols > 1 ? " break-inside-avoid mb-1" : ""}`} style={{ paddingLeft: INDENT_PX[level] }}>
+                      <li
+                        key={note.id}
+                        className={`group relative flex items-start gap-2${cols > 1 ? " break-inside-avoid mb-1" : ""}${isDragTarget ? " border-t-2 border-amber-400" : " border-t-2 border-transparent"}`}
+                        style={{ paddingLeft: INDENT_PX[level] }}
+                        draggable={editingNoteId !== note.id}
+                        onDragStart={(e) => { setDragNoteId(note.id); e.dataTransfer.effectAllowed = "move"; }}
+                        onDragOver={(e) => { e.preventDefault(); if (dragNoteId && dragNoteId !== note.id) setDragOverNoteId(note.id); }}
+                        onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node)) setDragOverNoteId(null); }}
+                        onDrop={(e) => { e.preventDefault(); if (dragNoteId && dragNoteId !== note.id) reorderNote(activeChapter.id, dragNoteId, note.id); setDragNoteId(null); setDragOverNoteId(null); }}
+                        onDragEnd={() => { setDragNoteId(null); setDragOverNoteId(null); }}
+                      >
+                        <span className="opacity-0 group-hover:opacity-100 cursor-grab active:cursor-grabbing mt-1 flex-shrink-0 text-ink-200 hover:text-ink-400 select-none text-xs leading-none" title="Drag to reorder">⠿</span>
                         <span className={`mt-0.5 flex-shrink-0 text-sm leading-tight select-none min-w-[1.25rem] text-right ${BULLET_COLOR[level]}`}>
                           {marker}
                         </span>
@@ -998,6 +1048,26 @@ export default function BookPage() {
                               className="text-ink-300 hover:text-ink-700 text-xs p-0.5">✎</button>
                             <button onClick={() => deleteNote(activeChapter.id, note.id)}
                               className="text-ink-300 hover:text-red-500 text-sm p-0.5 leading-none">×</button>
+                            <button
+                              onMouseDown={(e) => e.stopPropagation()}
+                              onClick={() => setMoveMenuNoteId((prev) => prev === note.id ? null : note.id)}
+                              className="text-ink-300 hover:text-amber-600 text-xs px-1 py-0.5 rounded hover:bg-parchment-200"
+                              title="Move to chapter"
+                            >↗</button>
+                          </div>
+                        )}
+                        {moveMenuNoteId === note.id && (
+                          <div onMouseDown={(e) => e.stopPropagation()} className="absolute right-0 top-6 z-50 bg-white border border-parchment-200 rounded-lg shadow-lg py-1 min-w-[160px]">
+                            <p className="px-3 py-1 text-xs text-ink-400 font-medium border-b border-parchment-100">Move to chapter</p>
+                            {book.chapters.filter((c) => !c.deleted && c.id !== activeChapter.id).length === 0
+                              ? <p className="px-3 py-2 text-sm text-ink-400">No other chapters</p>
+                              : book.chapters.filter((c) => !c.deleted && c.id !== activeChapter.id).map((c) => (
+                                <button key={c.id} onClick={() => moveNoteToChapter(activeChapter.id, note.id, c.id)}
+                                  className="w-full text-left px-3 py-1.5 text-sm text-ink-700 hover:bg-parchment-100">
+                                  {c.number ? `${c.number}. ${c.name}` : c.name}
+                                </button>
+                              ))
+                            }
                           </div>
                         )}
                       </li>
