@@ -278,6 +278,14 @@ export default function BookPage() {
     setListening(true);
   }
 
+  // Resize the note input whenever its value changes (covers dictation and clear-on-add)
+  useEffect(() => {
+    const el = noteInputRef.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = el.scrollHeight + "px";
+  }, [noteInput]);
+
   useEffect(() => {
     if (authLoading || booksLoading) return;
     if (!user) { router.push("/"); return; }
@@ -683,6 +691,7 @@ export default function BookPage() {
                                 <textarea
                                   autoFocus
                                   rows={1}
+                                  ref={(el) => { if (el) { el.style.height = "auto"; el.style.height = el.scrollHeight + "px"; } }}
                                   value={editingNoteText}
                                   onChange={(e) => {
                                     setEditingNoteText(e.target.value);
