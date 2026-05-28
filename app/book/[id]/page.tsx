@@ -369,6 +369,9 @@ export default function BookPage() {
     noteInputRef.current?.focus();
 
     if (fromDictation) {
+      // Strip any stray "new bullet" voice commands captured in the transcript
+      text = text.replace(/\bnew\s+bullet\b[\s.,!?]*/gi, "").trim();
+      if (!text) return;
       setPolishing(true);
       text = await polishWithGemini(text);
       setPolishing(false);
