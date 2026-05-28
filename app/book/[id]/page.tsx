@@ -112,11 +112,13 @@ function normalizeDictation(text: string): string {
   ];
   let out = text;
   for (const [re, repl] of subs) out = out.replace(re, repl);
+  // Lowercase everything first so Chrome's mid-segment capitalizations are stripped
+  out = out.toLowerCase();
   // Remove space before closing punctuation / inside an opening paren
   out = out.replace(/\s+([.,!?;:)])/g, "$1");
   out = out.replace(/(\()\s+/g, "$1");
   // Ensure a single space after sentence-ending punctuation when a letter follows
-  out = out.replace(/([.!?])\s*([A-Za-z])/g, "$1 $2");
+  out = out.replace(/([.!?])\s*([a-z])/g, "$1 $2");
   // Capitalize the first letter of the whole string
   out = out.replace(/^(\s*)([a-z])/, (_, ws, c) => ws + c.toUpperCase());
   // Capitalize the letter after a sentence-ending punctuation
