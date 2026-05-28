@@ -50,7 +50,11 @@ export async function POST(req: NextRequest) {
       body: JSON.stringify({
         systemInstruction: { parts: [{ text: SYSTEM }] },
         contents: [{ parts: [{ text: raw }] }],
-        generationConfig: { temperature: 0, maxOutputTokens: 2048 },
+        generationConfig: {
+          temperature: 1,
+          maxOutputTokens: 2048,
+          thinkingConfig: { thinkingBudget: 5000 },
+        },
       }),
     },
   );
