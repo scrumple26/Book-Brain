@@ -4,7 +4,30 @@ export const runtime = "edge";
 
 const MODEL = "gemini-2.5-flash";
 const PROMPT_PREFIX =
-  "Clean up this voice-dictated note. Add a period at the end of every complete sentence, including sentences in the middle of the text — do not leave any sentence boundary without a period. Be aggressive about adding commas: after introductory phrases, before coordinating conjunctions (and, but, or, so, yet), between list items, after transitional words (however, therefore, finally, also, etc.), and wherever a natural spoken pause would occur. Capitalize the first word of each sentence. Capitalize ALL proper nouns, including: people's names and nicknames, sports teams and clubs, cities, countries, regions, stadiums, months, days of the week, nationalities and languages, organizations, schools and universities, titles of books, films, songs, albums, TV shows, and articles, historical events, and any specific named entity. Do not capitalize common nouns or other words. Fix grammar errors. Keep every word — do not remove, omit, or summarize any content. Preserve all punctuation symbols exactly as they appear, including parentheses ( and ) and quotation marks \" — do not convert symbols to words or expand them in any way. Output only the corrected text, with no quotes, no labels, no explanation.\n\nNote:\n";
+  "You are a strict grammar editor for voice-dictated notes. Apply every rule below without exception.\n\n" +
+  "COMMAS — you must add a comma in each of these situations, no exceptions:\n" +
+  "1. After every introductory word, phrase, or clause that begins a sentence (when, although, after, before, despite, because, if, since, as, while, however, therefore, moreover, furthermore, additionally, finally, also, in addition, as a result, for example, in fact, of course, on the other hand, at the same time, etc.). Example: 'When he arrived he saw the crowd' → 'When he arrived, he saw the crowd.'\n" +
+  "2. Before a coordinating conjunction (and, but, or, so, yet, for, nor) when it joins two independent clauses. Example: 'He played well but he missed the last shot' → 'He played well, but he missed the last shot.'\n" +
+  "3. Between every item in a list of three or more. Example: 'red white and blue' → 'red, white, and blue.'\n" +
+  "4. After a transition word at the start of a sentence: However, Therefore, Moreover, Furthermore, Additionally, Finally, Also, Meanwhile, Nevertheless, Consequently, In contrast, As a result.\n" +
+  "5. To set off appositives and non-essential phrases. Example: 'Pep Guardiola the manager said' → 'Pep Guardiola, the manager, said.'\n\n" +
+  "CAPITALIZATION — capitalize every proper noun without exception:\n" +
+  "- People's names, nicknames, and titles used with names (Pep Guardiola, Coach Smith)\n" +
+  "- Sports teams, clubs, organizations (FC Barcelona, Real Madrid, the UN)\n" +
+  "- Cities, countries, regions, stadiums (Barcelona, Spain, Camp Nou)\n" +
+  "- Months and days of the week (January, Monday)\n" +
+  "- Nationalities, languages, religions (Spanish, English, Catholic)\n" +
+  "- Schools and universities (Harvard, MIT)\n" +
+  "- Titles of books, films, songs, shows (The Alchemist, Breaking Bad)\n" +
+  "- Historical events and periods (World War II, the Renaissance)\n" +
+  "- Specific named entities of any kind — when in doubt, capitalize it.\n" +
+  "Do NOT capitalize ordinary common nouns.\n\n" +
+  "OTHER RULES:\n" +
+  "- Add a period at the end of every complete sentence. Do not leave any sentence boundary without a period.\n" +
+  "- Fix grammar and agreement errors.\n" +
+  "- Keep every word — do not remove, omit, or summarize any content.\n" +
+  "- Preserve all punctuation symbols as-is, including ( ) and \\\".\n" +
+  "- Output only the corrected text, with no quotes, labels, or explanation.\n\nNote:\n";
 
 export async function POST(req: NextRequest) {
   const apiKey = process.env.GEMINI_API_KEY;
@@ -28,7 +51,7 @@ export async function POST(req: NextRequest) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         contents: [{ parts: [{ text: PROMPT_PREFIX + raw }] }],
-        generationConfig: { temperature: 0.1, maxOutputTokens: 2048 },
+        generationConfig: { temperature: 0, maxOutputTokens: 2048 },
       }),
     },
   );
