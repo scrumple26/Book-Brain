@@ -2,7 +2,7 @@
 
 export const dynamic = "force-dynamic";
 
-import { useState, useRef, useMemo } from "react";
+import { useState, useRef, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { Book } from "@/lib/types";
 import { generateId } from "@/lib/storage";
@@ -105,10 +105,11 @@ export default function Library() {
   const [logPages, setLogPages] = useState("");
   const [logBookId, setLogBookId] = useState("");
 
-  // Feature 6: Random notes (computed once per session with useRef)
-  const randomNotesRef = useRef<{ text: string; bookTitle: string; chapterName: string; bold: boolean }[] | null>(null);
-  const randomNotes = useMemo(() => {
-    if (randomNotesRef.current !== null) return randomNotesRef.current;
+  // Feature 6: Random notes — computed once after books first load
+  const [randomNotes, setRandomNotes] = useState<{ text: string; bookTitle: string; chapterName: string; bold: boolean }[]>([]);
+  const randomNotesPicked = useRef(false);
+  useEffect(() => {
+    if (randomNotesPicked.current || booksLoading || books.length === 0) return;
     const pool: { text: string; bookTitle: string; chapterName: string; bold: boolean }[] = [];
     for (const b of books) {
       for (const c of b.chapters.filter((ch) => !ch.deleted)) {
@@ -117,12 +118,11 @@ export default function Library() {
         }
       }
     }
-    if (pool.length === 0) { randomNotesRef.current = []; return []; }
+    if (pool.length === 0) return;
+    randomNotesPicked.current = true;
     const shuffled = [...pool].sort(() => Math.random() - 0.5);
-    const picked = shuffled.slice(0, 5);
-    randomNotesRef.current = picked;
-    return picked;
-  }, [books]); // eslint-disable-line react-hooks/exhaustive-deps
+    setRandomNotes(shuffled.slice(0, 5));
+  }, [books, booksLoading]);
 
   function resetForm() {
     setTitle("");
