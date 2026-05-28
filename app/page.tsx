@@ -2,7 +2,7 @@
 
 export const dynamic = "force-dynamic";
 
-import { useState, useRef } from "react";
+import { useState, useRef, useMemo } from "react";
 import { useRouter } from "next/navigation";
 import { Book } from "@/lib/types";
 import { generateId } from "@/lib/storage";
@@ -99,6 +99,31 @@ export default function Library() {
   const [search, setSearch] = useState("");
   const [activeTag, setActiveTag] = useState<string | null>(null);
 
+  // Feature 7: Reading log
+  const todayStr = new Date().toISOString().split("T")[0];
+  const [logDate, setLogDate] = useState(todayStr);
+  const [logPages, setLogPages] = useState("");
+  const [logBookId, setLogBookId] = useState("");
+
+  // Feature 6: Random notes (computed once per session with useRef)
+  const randomNotesRef = useRef<{ text: string; bookTitle: string; chapterName: string; bold: boolean }[] | null>(null);
+  const randomNotes = useMemo(() => {
+    if (randomNotesRef.current !== null) return randomNotesRef.current;
+    const pool: { text: string; bookTitle: string; chapterName: string; bold: boolean }[] = [];
+    for (const b of books) {
+      for (const c of b.chapters.filter((ch) => !ch.deleted)) {
+        for (const n of c.notes) {
+          pool.push({ text: n.text, bookTitle: b.title, chapterName: c.name, bold: n.bold ?? false });
+        }
+      }
+    }
+    if (pool.length === 0) { randomNotesRef.current = []; return []; }
+    const shuffled = [...pool].sort(() => Math.random() - 0.5);
+    const picked = shuffled.slice(0, 5);
+    randomNotesRef.current = picked;
+    return picked;
+  }, [books]); // eslint-disable-line react-hooks/exhaustive-deps
+
   function resetForm() {
     setTitle("");
     setAuthor("");
@@ -127,6 +152,44 @@ export default function Library() {
     if (!confirm("Delete this book and all its notes?")) return;
     await removeBook(id);
   }
+
+  // Feature 7: Reading log submit
+  async function addReadingLogEntry() {
+    if (!logBookId || !logPages || !logDate) return;
+    const pages = parseInt(logPages, 10);
+    if (isNaN(pages) || pages <= 0) return;
+    const targetBook = books.find((b) => b.id === logBookId);
+    if (!targetBook) return;
+    const entry = { date: logDate, pages };
+    const updated: Book = { ...targetBook, readingLog: [...(targetBook.readingLog ?? []), entry] };
+    setLogPages("");
+    await upsertBook(updated);
+  }
+
+  // Feature 7: Stats derived from readingLog
+  const currentYear = new Date().getFullYear().toString();
+  const currentMonth = new Date().toISOString().slice(0, 7); // YYYY-MM
+  let totalPagesThisMonth = 0;
+  let totalPagesThisYear = 0;
+  const recentLogEntries: { date: string; pages: number; bookTitle: string }[] = [];
+  for (const b of books) {
+    for (const e of b.readingLog ?? []) {
+      if (e.date.startsWith(currentMonth)) totalPagesThisMonth += e.pages;
+      if (e.date.startsWith(currentYear)) totalPagesThisYear += e.pages;
+      recentLogEntries.push({ date: e.date, pages: e.pages, bookTitle: b.title });
+    }
+  }
+  recentLogEntries.sort((a, b) => b.date.localeCompare(a.date));
+  const last5Entries = recentLogEntries.slice(0, 5);
+
+  // Feature 8: Books completed this year chart
+  const completedThisYear = books.filter((b) => b.dateCompleted?.startsWith(currentYear));
+  const monthCounts = Array.from({ length: 12 }, (_, i) => {
+    const mm = String(i + 1).padStart(2, "0");
+    return completedThisYear.filter((b) => b.dateCompleted?.startsWith(`${currentYear}-${mm}`)).length;
+  });
+  const maxMonthCount = Math.max(...monthCounts, 1);
+  const MONTH_LABELS = ["J", "F", "M", "A", "M", "J", "J", "A", "S", "O", "N", "D"];
 
   // All unique tags across all books
   const allTags = Array.from(new Set(books.flatMap((b) => b.tags ?? []))).sort();
@@ -220,6 +283,112 @@ export default function Library() {
                 {tag}
               </button>
             ))}
+          </div>
+        )}
+
+        {/* ── Features 6 / 7 / 8 — three-column info cards ── */}
+        {!booksLoading && (
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
+
+            {/* Feature 6: Random notes */}
+            {randomNotes.length > 0 && (
+              <div className="bg-white border border-parchment-200 rounded-xl p-5">
+                <p className="text-xs font-medium text-ink-300 uppercase tracking-wide mb-3">📝 From Your Notes</p>
+                <div className="space-y-3">
+                  {randomNotes.map((n, i) => (
+                    <div key={i} className="border-l-2 border-amber-300 pl-3">
+                      <p className={`text-sm text-ink-800 leading-snug ${n.bold ? "font-bold" : ""}`}>{n.text}</p>
+                      <p className="text-xs text-ink-300 mt-0.5 italic">— {n.bookTitle}, {n.chapterName}</p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Feature 7: Reading log */}
+            <div className="bg-white border border-parchment-200 rounded-xl p-5">
+              <p className="text-xs font-medium text-ink-300 uppercase tracking-wide mb-3">📖 Reading Log</p>
+              <div className="flex gap-4 mb-3 text-sm">
+                <div>
+                  <span className="text-xs text-ink-300">This month</span>
+                  <p className="font-semibold text-ink-900">{totalPagesThisMonth.toLocaleString()} pg</p>
+                </div>
+                <div>
+                  <span className="text-xs text-ink-300">This year</span>
+                  <p className="font-semibold text-ink-900">{totalPagesThisYear.toLocaleString()} pg</p>
+                </div>
+              </div>
+              <div className="space-y-1.5 mb-3">
+                <select
+                  value={logBookId}
+                  onChange={(e) => setLogBookId(e.target.value)}
+                  className="w-full border border-parchment-300 rounded-lg px-3 py-2 text-sm text-ink-900 focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-transparent bg-white"
+                >
+                  <option value="">Select book…</option>
+                  {books.map((b) => (
+                    <option key={b.id} value={b.id}>{b.title}</option>
+                  ))}
+                </select>
+                <div className="flex gap-1.5">
+                  <input
+                    type="date"
+                    value={logDate}
+                    onChange={(e) => setLogDate(e.target.value)}
+                    className="flex-1 border border-parchment-300 rounded-lg px-2 py-2 text-sm text-ink-900 focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-transparent"
+                  />
+                  <input
+                    type="number"
+                    min="1"
+                    value={logPages}
+                    onChange={(e) => setLogPages(e.target.value)}
+                    placeholder="Pages"
+                    className="w-20 border border-parchment-300 rounded-lg px-2 py-2 text-sm text-ink-900 placeholder-ink-300 focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-transparent"
+                  />
+                  <button
+                    onClick={addReadingLogEntry}
+                    disabled={!logBookId || !logPages || !logDate}
+                    className="bg-amber-600 hover:bg-amber-500 disabled:opacity-40 text-white text-xs font-medium px-3 py-2 rounded-lg transition-colors"
+                  >Add</button>
+                </div>
+              </div>
+              {last5Entries.length > 0 && (
+                <div className="space-y-1 border-t border-parchment-100 pt-2">
+                  {last5Entries.map((e, i) => (
+                    <div key={i} className="flex items-center justify-between text-xs text-ink-500">
+                      <span className="truncate mr-2">{e.bookTitle}</span>
+                      <span className="flex-shrink-0 text-ink-300">{e.date} · {e.pages} pg</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* Feature 8: Completed this year chart */}
+            <div className="bg-white border border-parchment-200 rounded-xl p-5">
+              <p className="text-xs font-medium text-ink-300 uppercase tracking-wide mb-1">📊 Completed This Year</p>
+              {completedThisYear.length === 0 ? (
+                <p className="text-ink-300 text-sm italic mt-4">No books completed in {currentYear} yet.</p>
+              ) : (
+                <>
+                  <p className="text-sm font-semibold text-ink-900 mb-3">{completedThisYear.length} book{completedThisYear.length !== 1 ? "s" : ""} completed in {currentYear}</p>
+                  <svg viewBox="0 0 240 80" className="w-full" aria-hidden="true">
+                    {monthCounts.map((count, i) => {
+                      const barH = count === 0 ? 2 : Math.max(4, Math.round((count / maxMonthCount) * 60));
+                      const x = i * 20 + 4;
+                      const y = 65 - barH;
+                      return (
+                        <g key={i}>
+                          <rect x={x} y={y} width={12} height={barH} rx={2}
+                            fill={count > 0 ? "#d97706" : "#fde68a"} />
+                          <text x={x + 6} y={76} textAnchor="middle" fontSize="7" fill="#9ca3af">{MONTH_LABELS[i]}</text>
+                        </g>
+                      );
+                    })}
+                  </svg>
+                </>
+              )}
+            </div>
+
           </div>
         )}
 

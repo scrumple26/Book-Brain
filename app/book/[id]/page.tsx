@@ -35,32 +35,51 @@ function buildNumberMap(notes: Note[]): Map<string, number> {
   return map;
 }
 
+function chapterToMarkdownLines(chapter: Chapter): string[] {
+  const lines: string[] = [];
+  const chapterHeading = chapter.number ? `${chapter.number}. ${chapter.name}` : chapter.name;
+  lines.push(`## ${chapterHeading}`);
+  lines.push("");
+  const nums = buildNumberMap(chapter.notes);
+  for (const note of chapter.notes) {
+    const lvl = Math.min(note.indent ?? 0, 2);
+    const sp = SPACES[lvl];
+    if ((note.type ?? "bullet") === "numbered") {
+      lines.push(`${sp}${nums.get(note.id)}. ${note.text}`);
+    } else {
+      lines.push(`${sp}- ${note.text}`);
+    }
+  }
+  lines.push("");
+  return lines;
+}
+
 function exportMarkdown(book: Book): void {
   const lines: string[] = [];
   lines.push(`# ${book.title}`);
   lines.push(`*${book.author}*`);
   lines.push("");
-  for (const chapter of book.chapters) {
-    const chapterHeading = chapter.number ? `${chapter.number}. ${chapter.name}` : chapter.name;
-    lines.push(`## ${chapterHeading}`);
-    lines.push("");
-    const nums = buildNumberMap(chapter.notes);
-    for (const note of chapter.notes) {
-      const lvl = Math.min(note.indent ?? 0, 2);
-      const sp = SPACES[lvl];
-      if ((note.type ?? "bullet") === "numbered") {
-        lines.push(`${sp}${nums.get(note.id)}. ${note.text}`);
-      } else {
-        lines.push(`${sp}- ${note.text}`);
-      }
-    }
-    lines.push("");
+  for (const chapter of book.chapters.filter((c) => !c.deleted)) {
+    lines.push(...chapterToMarkdownLines(chapter));
   }
   const blob = new Blob([lines.join("\n")], { type: "text/markdown" });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
   a.download = `${book.title.replace(/[^a-z0-9]/gi, "-").toLowerCase()}-notes.md`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+function exportChapterMarkdown(chapter: Chapter, bookTitle: string): void {
+  const lines = chapterToMarkdownLines(chapter);
+  const blob = new Blob([lines.join("\n")], { type: "text/markdown" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  const safeName = chapter.name.replace(/[^a-z0-9]/gi, "-").toLowerCase();
+  const safeBook = bookTitle.replace(/[^a-z0-9]/gi, "-").toLowerCase();
+  a.download = `${safeBook}-${safeName}.md`;
   a.click();
   URL.revokeObjectURL(url);
 }
@@ -152,6 +171,13 @@ export default function BookPage() {
   const [editingNoteText, setEditingNoteText] = useState("");
   const [editingNoteIndent, setEditingNoteIndent] = useState(0);
   const [editingNoteType, setEditingNoteType] = useState<"bullet" | "numbered">("bullet");
+  const [editingNoteBold, setEditingNoteBold] = useState(false);
+  const [showDeleted, setShowDeleted] = useState(false);
+  const [quizOpen, setQuizOpen] = useState(false);
+  const [quizLoading, setQuizLoading] = useState(false);
+  const [quizQuestions, setQuizQuestions] = useState<{ question: string; answer: string }[]>([]);
+  const [quizIdx, setQuizIdx] = useState(0);
+  const [showAnswer, setShowAnswer] = useState(false);
   const [listening, setListening] = useState(false);
   const [polishing, setPolishing] = useState(false);
   const [reformatting, setReformatting] = useState(false);
@@ -384,10 +410,60 @@ export default function BookPage() {
   }
 
   function deleteChapter(chapterId: string) {
-    if (!book || !confirm("Delete this chapter and all its notes?")) return;
-    const updated = { ...book, chapters: book.chapters.filter((c) => c.id !== chapterId) };
+    if (!book) return;
+    const chapter = book.chapters.find((c) => c.id === chapterId);
+    if (!chapter) return;
+    if (chapter.notes.length > 0 && !confirm("Delete this chapter? You can restore it later.")) return;
+    const updated = { ...book, chapters: book.chapters.map((c) => c.id === chapterId ? { ...c, deleted: true } : c) };
     persist(updated);
-    if (activeChapterId === chapterId) setActiveChapterId(updated.chapters[0]?.id ?? null);
+    if (activeChapterId === chapterId) {
+      const firstAlive = updated.chapters.find((c) => !c.deleted);
+      setActiveChapterId(firstAlive?.id ?? null);
+    }
+  }
+
+  function restoreChapter(chapterId: string) {
+    if (!book) return;
+    persist({ ...book, chapters: book.chapters.map((c) => c.id === chapterId ? { ...c, deleted: false } : c) });
+  }
+
+  function toggleNoteBold(chapterId: string, noteId: string) {
+    if (!book) return;
+    persist({
+      ...book,
+      chapters: book.chapters.map((c) =>
+        c.id === chapterId
+          ? { ...c, notes: c.notes.map((n) => n.id === noteId ? { ...n, bold: !n.bold } : n) }
+          : c
+      ),
+    });
+  }
+
+  async function openQuiz() {
+    if (!book) return;
+    setQuizOpen(true);
+    setQuizLoading(true);
+    const allNotes = book.chapters
+      .filter((c) => !c.deleted)
+      .flatMap((c) => c.notes.map((n) => n.text));
+    try {
+      const res = await fetch("/api/quiz", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ notes: allNotes }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setQuizQuestions(Array.isArray(data.questions) ? data.questions : []);
+      } else {
+        setQuizQuestions([]);
+      }
+    } catch {
+      setQuizQuestions([]);
+    }
+    setQuizIdx(0);
+    setShowAnswer(false);
+    setQuizLoading(false);
   }
 
   function saveChapterName(chapterId: string) {
@@ -539,7 +615,7 @@ export default function BookPage() {
       ...book,
       chapters: book.chapters.map((c) =>
         c.id === chapterId
-          ? { ...c, notes: c.notes.map((n) => n.id === noteId ? { ...n, text: editingNoteText.trim(), indent: editingNoteIndent, type: editingNoteType } : n) }
+          ? { ...c, notes: c.notes.map((n) => n.id === noteId ? { ...n, text: editingNoteText.trim(), indent: editingNoteIndent, type: editingNoteType, bold: editingNoteBold } : n) }
           : c
       ),
     });
@@ -549,7 +625,7 @@ export default function BookPage() {
   const searchResults: SearchResult[] = [];
   if (book && search.trim()) {
     const q = search.toLowerCase();
-    for (const chapter of book.chapters) {
+    for (const chapter of book.chapters.filter((c) => !c.deleted)) {
       const displayName = chapter.number ? `${chapter.number}. ${chapter.name}` : chapter.name;
       if (chapter.name.toLowerCase().includes(q)) {
         searchResults.push({ chapterId: chapter.id, chapterName: displayName, matchType: "chapter" });
@@ -562,7 +638,7 @@ export default function BookPage() {
     }
   }
 
-  const activeChapter = book?.chapters.find((c) => c.id === activeChapterId);
+  const activeChapter = book?.chapters.find((c) => c.id === activeChapterId && !c.deleted);
 
   if (authLoading || booksLoading || !book) {
     return (
@@ -628,6 +704,13 @@ export default function BookPage() {
             >
               <span>↓</span> Export MD
             </button>
+            <button
+              onClick={openQuiz}
+              className="flex items-center gap-1.5 border border-parchment-300 text-ink-500 hover:border-amber-500 hover:text-amber-600 text-xs font-medium px-3 py-2 rounded-lg transition-colors"
+              title="Quiz yourself on this book"
+            >
+              🎓 Quiz
+            </button>
           </div>
         </div>
       </header>
@@ -672,7 +755,7 @@ export default function BookPage() {
               title="Show chapters"
             >
               <span className="[writing-mode:vertical-rl] rotate-180 text-xs font-medium text-ink-500 uppercase tracking-wider whitespace-nowrap">
-                Chapters · {book.chapters.length}
+                Chapters · {book.chapters.filter((c) => !c.deleted).length}
               </span>
             </button>
           </aside>
@@ -710,10 +793,10 @@ export default function BookPage() {
           )}
 
           <nav className="flex-1 overflow-y-auto py-2">
-            {book.chapters.length === 0 && !addingChapter && (
+            {book.chapters.filter((c) => !c.deleted).length === 0 && !addingChapter && (
               <p className="text-ink-300 text-xs italic px-4 py-3">No chapters yet.</p>
             )}
-            {book.chapters.map((chapter) => (
+            {book.chapters.filter((c) => !c.deleted).map((chapter) => (
               <div key={chapter.id} className="group relative">
                 {editingChapterId === chapter.id ? (
                   <div
@@ -751,6 +834,9 @@ export default function BookPage() {
                 )}
                 {editingChapterId !== chapter.id && (
                   <div className="absolute right-1 top-1/2 -translate-y-1/2 hidden group-hover:flex gap-0.5">
+                    <button onClick={() => exportChapterMarkdown(chapter, book.title)}
+                      className={`p-1 rounded text-xs ${activeChapterId === chapter.id ? "text-amber-100 hover:text-white hover:bg-amber-500" : "text-ink-300 hover:text-ink-700 hover:bg-parchment-300"}`}
+                      title="Export chapter as Markdown">↓</button>
                     <button onClick={() => { setEditingChapterId(chapter.id); setEditingChapterName(chapter.name); setEditingChapterNumber(chapter.number ?? ""); }}
                       className={`p-1 rounded text-xs ${activeChapterId === chapter.id ? "text-amber-100 hover:text-white hover:bg-amber-500" : "text-ink-300 hover:text-ink-700 hover:bg-parchment-300"}`}>✎</button>
                     <button onClick={() => deleteChapter(chapter.id)}
@@ -759,6 +845,26 @@ export default function BookPage() {
                 )}
               </div>
             ))}
+            {/* Deleted chapters section */}
+            {book.chapters.some((c) => c.deleted) && (
+              <div className="mt-2 border-t border-parchment-200 pt-2">
+                <button
+                  onClick={() => setShowDeleted((v) => !v)}
+                  className="w-full text-left px-4 py-1.5 text-xs font-medium text-ink-300 hover:text-ink-500 uppercase tracking-wide flex items-center gap-1"
+                >
+                  <span>{showDeleted ? "▾" : "▸"}</span> Deleted chapters ({book.chapters.filter((c) => c.deleted).length})
+                </button>
+                {showDeleted && book.chapters.filter((c) => c.deleted).map((chapter) => (
+                  <div key={chapter.id} className="flex items-center justify-between px-4 py-1.5 gap-2">
+                    <span className="text-xs text-ink-300 truncate italic">{chapter.name}</span>
+                    <button
+                      onClick={() => restoreChapter(chapter.id)}
+                      className="flex-shrink-0 text-xs text-amber-600 hover:text-amber-500 font-medium"
+                    >Restore</button>
+                  </div>
+                ))}
+              </div>
+            )}
           </nav>
         </aside>
         )}
@@ -824,6 +930,13 @@ export default function BookPage() {
                             >
                               {editingNoteType === "numbered" ? "1." : "•"}
                             </button>
+                            <button
+                              onClick={() => setEditingNoteBold((b) => !b)}
+                              className={`flex-shrink-0 text-xs border rounded px-1.5 py-0.5 font-bold transition-colors ${editingNoteBold ? "border-amber-500 bg-amber-50 text-amber-700" : "border-parchment-300 text-ink-500 hover:border-amber-500 hover:text-amber-600"}`}
+                              title="Toggle bold"
+                            >
+                              B
+                            </button>
                             <textarea
                               autoFocus
                               rows={1}
@@ -844,7 +957,7 @@ export default function BookPage() {
                             />
                           </div>
                         ) : (
-                          <span className="flex-1 text-sm text-ink-800 leading-relaxed">{note.text}</span>
+                          <span className={`flex-1 text-sm leading-relaxed ${note.bold ? "font-bold text-ink-900" : "text-ink-800"}`}>{note.text}</span>
                         )}
                         {editingNoteId !== note.id && (
                           <div className="flex gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0 mt-0.5">
@@ -852,7 +965,10 @@ export default function BookPage() {
                               className="text-ink-300 hover:text-ink-700 disabled:opacity-20 text-xs px-1 py-0.5 rounded hover:bg-parchment-200" title="Outdent">←</button>
                             <button onClick={() => changeNoteIndent(activeChapter.id, note.id, 1)} disabled={level === 2}
                               className="text-ink-300 hover:text-ink-700 disabled:opacity-20 text-xs px-1 py-0.5 rounded hover:bg-parchment-200" title="Indent">→</button>
-                            <button onClick={() => { setEditingNoteId(note.id); setEditingNoteText(note.text); setEditingNoteIndent(level); setEditingNoteType(note.type ?? "bullet"); }}
+                            <button onClick={() => toggleNoteBold(activeChapter.id, note.id)}
+                              className={`text-xs px-1 py-0.5 rounded font-bold hover:bg-parchment-200 ${note.bold ? "text-amber-600 hover:text-amber-700" : "text-ink-300 hover:text-ink-700"}`}
+                              title="Toggle bold">B</button>
+                            <button onClick={() => { setEditingNoteId(note.id); setEditingNoteText(note.text); setEditingNoteIndent(level); setEditingNoteType(note.type ?? "bullet"); setEditingNoteBold(note.bold ?? false); }}
                               className="text-ink-300 hover:text-ink-700 text-xs p-0.5">✎</button>
                             <button onClick={() => deleteNote(activeChapter.id, note.id)}
                               className="text-ink-300 hover:text-red-500 text-sm p-0.5 leading-none">×</button>
@@ -982,6 +1098,55 @@ export default function BookPage() {
           )}
         </main>
       </div>
+
+      {/* Quiz modal */}
+      {quizOpen && (
+        <div className="fixed inset-0 bg-ink-900/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-lg p-6 flex flex-col gap-4">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-medium text-ink-300 uppercase tracking-wide">
+                {quizLoading ? "Generating quiz…" : quizQuestions.length > 0 ? `Question ${quizIdx + 1} of ${quizQuestions.length}` : "Quiz"}
+              </span>
+              <button onClick={() => setQuizOpen(false)} className="text-ink-300 hover:text-ink-700 text-lg leading-none">×</button>
+            </div>
+            {quizLoading ? (
+              <div className="text-center py-8">
+                <p className="text-ink-400 text-sm animate-pulse">✨ Generating questions…</p>
+              </div>
+            ) : quizQuestions.length === 0 ? (
+              <p className="text-ink-400 text-sm italic text-center py-8">Could not generate quiz. Make sure this book has notes.</p>
+            ) : (
+              <>
+                <p className="font-serif text-ink-900 text-lg leading-snug">{quizQuestions[quizIdx].question}</p>
+                {showAnswer ? (
+                  <div className="bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 text-sm text-ink-800">
+                    {quizQuestions[quizIdx].answer}
+                  </div>
+                ) : (
+                  <button
+                    onClick={() => setShowAnswer(true)}
+                    className="bg-amber-600 hover:bg-amber-500 text-white text-sm font-medium px-4 py-2.5 rounded-lg transition-colors"
+                  >
+                    Reveal Answer
+                  </button>
+                )}
+                <div className="flex gap-2 mt-2">
+                  <button
+                    onClick={() => { setQuizIdx((i) => Math.max(0, i - 1)); setShowAnswer(false); }}
+                    disabled={quizIdx === 0}
+                    className="flex-1 border border-parchment-300 text-ink-500 text-sm font-medium py-2 rounded-lg hover:bg-parchment-100 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                  >← Prev</button>
+                  <button
+                    onClick={() => { setQuizIdx((i) => Math.min(quizQuestions.length - 1, i + 1)); setShowAnswer(false); }}
+                    disabled={quizIdx === quizQuestions.length - 1}
+                    className="flex-1 border border-parchment-300 text-ink-500 text-sm font-medium py-2 rounded-lg hover:bg-parchment-100 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                  >Next →</button>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

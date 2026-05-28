@@ -2,6 +2,7 @@ import {
   collection,
   doc,
   getDocs,
+  getDoc,
   setDoc,
   deleteDoc,
   query,
@@ -26,4 +27,19 @@ export async function saveBook(uid: string, book: Book): Promise<void> {
 
 export async function deleteBook(uid: string, bookId: string): Promise<void> {
   await deleteDoc(doc(booksRef(uid), bookId));
+}
+
+function backupsRef(uid: string) {
+  return collection(getFirebaseDb(), "users", uid, "backups");
+}
+
+export async function hasTodayBackup(uid: string): Promise<boolean> {
+  const today = new Date().toISOString().split("T")[0];
+  const snap = await getDoc(doc(backupsRef(uid), today));
+  return snap.exists();
+}
+
+export async function saveBackup(uid: string, books: Book[]): Promise<void> {
+  const today = new Date().toISOString().split("T")[0];
+  await setDoc(doc(backupsRef(uid), today), { id: today, books, createdAt: new Date().toISOString() });
 }

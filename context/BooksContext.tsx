@@ -2,7 +2,7 @@
 
 import { createContext, useContext, useEffect, useState, useCallback } from "react";
 import { Book } from "@/lib/types";
-import { fetchBooks, saveBook, deleteBook as deleteBookFS } from "@/lib/firestore";
+import { fetchBooks, saveBook, deleteBook as deleteBookFS, hasTodayBackup, saveBackup } from "@/lib/firestore";
 import { useAuth } from "./AuthContext";
 
 interface BooksContextValue {
@@ -39,7 +39,13 @@ export function BooksProvider({ children }: { children: React.ReactNode }) {
     setFetchingBooks(true);
     setError(null);
     fetchBooks(user.uid)
-      .then(setBooks)
+      .then((loadedBooks) => {
+        setBooks(loadedBooks);
+        // Daily backup: fire-and-forget, swallow all errors
+        hasTodayBackup(user.uid)
+          .then((has) => { if (!has) return saveBackup(user.uid, loadedBooks); })
+          .catch(() => {});
+      })
       .catch((err) => {
         const msg = err instanceof Error ? err.message : String(err);
         setError(`Failed to load books: ${msg}`);
