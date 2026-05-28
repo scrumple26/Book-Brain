@@ -197,7 +197,6 @@ export default function BookPage() {
   const [dragNoteId, setDragNoteId] = useState<string | null>(null);
   const dragNoteIdRef = useRef<string | null>(null);
   const [dragOverNoteId, setDragOverNoteId] = useState<string | null>(null);
-  const [moveMenuNoteId, setMoveMenuNoteId] = useState<string | null>(null);
   const [micDevices, setMicDevices] = useState<MediaDeviceInfo[]>([]);
   const [selectedMicId, setSelectedMicId] = useState("");
   const [sidebarOpen, setSidebarOpen] = useState<boolean>(() =>
@@ -398,12 +397,6 @@ export default function BookPage() {
     el.style.height = el.scrollHeight + "px";
   }, [noteInput]);
 
-  useEffect(() => {
-    if (!moveMenuNoteId) return;
-    const handler = () => setMoveMenuNoteId(null);
-    document.addEventListener("mousedown", handler);
-    return () => document.removeEventListener("mousedown", handler);
-  }, [moveMenuNoteId]);
 
   useEffect(() => {
     if (authLoading || booksLoading) return;
@@ -666,7 +659,6 @@ export default function BookPage() {
         return c;
       }),
     });
-    setMoveMenuNoteId(null);
   }
 
   function saveNoteEdit(chapterId: string, noteId: string) {
@@ -1053,26 +1045,17 @@ export default function BookPage() {
                               className="text-ink-300 hover:text-ink-700 text-xs p-0.5">✎</button>
                             <button onClick={() => deleteNote(activeChapter.id, note.id)}
                               className="text-ink-300 hover:text-red-500 text-sm p-0.5 leading-none">×</button>
-                            <button
-                              onMouseDown={(e) => e.stopPropagation()}
-                              onClick={() => setMoveMenuNoteId((prev) => prev === note.id ? null : note.id)}
-                              className="text-ink-300 hover:text-amber-600 text-xs px-1 py-0.5 rounded hover:bg-parchment-200"
+                            <select
+                              value=""
+                              onChange={(e) => { if (e.target.value) moveNoteToChapter(activeChapter.id, note.id, e.target.value); }}
+                              className="text-ink-300 text-xs bg-transparent border-none cursor-pointer rounded hover:bg-parchment-200 py-0.5 max-w-[3rem]"
                               title="Move to chapter"
-                            >↗</button>
-                          </div>
-                        )}
-                        {moveMenuNoteId === note.id && (
-                          <div onMouseDown={(e) => e.stopPropagation()} className="absolute right-0 top-6 z-50 bg-white border border-parchment-200 rounded-lg shadow-lg py-1 min-w-[160px]">
-                            <p className="px-3 py-1 text-xs text-ink-400 font-medium border-b border-parchment-100">Move to chapter</p>
-                            {book.chapters.filter((c) => !c.deleted && c.id !== activeChapter.id).length === 0
-                              ? <p className="px-3 py-2 text-sm text-ink-400">No other chapters</p>
-                              : book.chapters.filter((c) => !c.deleted && c.id !== activeChapter.id).map((c) => (
-                                <button key={c.id} onClick={() => moveNoteToChapter(activeChapter.id, note.id, c.id)}
-                                  className="w-full text-left px-3 py-1.5 text-sm text-ink-700 hover:bg-parchment-100">
-                                  {c.number ? `${c.number}. ${c.name}` : c.name}
-                                </button>
-                              ))
-                            }
+                            >
+                              <option value="" disabled>↗</option>
+                              {book.chapters.filter((c) => !c.deleted && c.id !== activeChapter.id).map((c) => (
+                                <option key={c.id} value={c.id}>{c.number ? `${c.number}. ${c.name}` : c.name}</option>
+                              ))}
+                            </select>
                           </div>
                         )}
                       </li>
