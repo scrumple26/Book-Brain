@@ -564,7 +564,7 @@ export default function BookPage() {
       setReformatChapterProgress(`${i + 1} / ${total}`);
       const note = chapter.notes[i];
       let text = note.text.trim();
-      if (text && text.split(/\s+/).length >= 4) {
+      if (text) {
         text = await polishWithGemini(text);
         if (!/[.!?]$/.test(text)) text += ".";
       }
