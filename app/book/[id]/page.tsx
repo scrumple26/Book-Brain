@@ -351,8 +351,7 @@ export default function BookPage() {
       const result = typeof data?.text === "string" && data.text.trim() ? data.text.trim() : raw;
       // Fall back to original if Gemini dropped a significant portion of the content
       const wordCount = (s: string) => s.trim().split(/\s+/).length;
-      const safe = wordCount(result) >= wordCount(raw) * 0.85 ? result : raw;
-      return /[.!?]$/.test(safe) ? safe : safe + ".";
+      return wordCount(result) >= wordCount(raw) * 0.85 ? result : raw;
     } catch {
       return raw;
     }
@@ -374,6 +373,9 @@ export default function BookPage() {
       text = await polishWithGemini(text);
       setPolishing(false);
     }
+
+    // Always end with sentence-closing punctuation, typed or dictated
+    if (!/[.!?]$/.test(text)) text += ".";
 
     const note: Note = {
       id: generateId(),
