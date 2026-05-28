@@ -752,69 +752,85 @@ export default function BookPage() {
                     return <p className="text-ink-300 text-sm italic">No notes yet. Add your first note below.</p>;
                   }
                   const numMap = buildNumberMap(activeChapter.notes);
-                  const numberedCount = activeChapter.notes.filter(n => (n.type ?? "bullet") === "numbered").length;
-                  const cols = numberedCount > 50 ? 4 : numberedCount > 25 ? 3 : numberedCount > 10 ? 2 : 1;
-                  const ulCls = cols === 4 ? "columns-4 gap-x-6" : cols === 3 ? "columns-3 gap-x-6" : cols === 2 ? "columns-2 gap-x-6" : "space-y-1";
+
+                  // Group consecutive notes by type so bullets always render single-column
+                  type NoteGroup = { type: "bullet" | "numbered"; notes: typeof activeChapter.notes };
+                  const groups: NoteGroup[] = [];
+                  for (const note of activeChapter.notes) {
+                    const t = (note.type ?? "bullet") === "numbered" ? "numbered" : "bullet";
+                    if (groups.length > 0 && groups[groups.length - 1].type === t) {
+                      groups[groups.length - 1].notes.push(note);
+                    } else {
+                      groups.push({ type: t, notes: [note] });
+                    }
+                  }
+
+                  const renderNote = (note: typeof activeChapter.notes[0], cols: number) => {
+                    const level = Math.min(note.indent ?? 0, 2);
+                    const isNumbered = (note.type ?? "bullet") === "numbered";
+                    const marker = isNumbered ? `${numMap.get(note.id)}.` : BULLET_CHAR[level];
+                    return (
+                      <li key={note.id} className={`group flex items-start gap-2${cols > 1 ? " break-inside-avoid mb-1" : ""}`} style={{ paddingLeft: INDENT_PX[level] }}>
+                        <span className={`mt-0.5 flex-shrink-0 text-sm leading-tight select-none min-w-[1.25rem] text-right ${BULLET_COLOR[level]}`}>
+                          {marker}
+                        </span>
+                        {editingNoteId === note.id ? (
+                          <div className="flex-1 flex items-center gap-2">
+                            <button
+                              onClick={() => setEditingNoteType((t) => t === "bullet" ? "numbered" : "bullet")}
+                              className="flex-shrink-0 text-xs border border-parchment-300 rounded px-1.5 py-0.5 text-ink-500 hover:border-amber-500 hover:text-amber-600 transition-colors"
+                              title="Toggle bullet / numbered"
+                            >
+                              {editingNoteType === "numbered" ? "1." : "•"}
+                            </button>
+                            <textarea
+                              autoFocus
+                              rows={1}
+                              ref={(el) => { if (el) { el.style.height = "auto"; el.style.height = el.scrollHeight + "px"; } }}
+                              value={editingNoteText}
+                              onChange={(e) => {
+                                setEditingNoteText(e.target.value);
+                                e.target.style.height = "auto";
+                                e.target.style.height = e.target.scrollHeight + "px";
+                              }}
+                              onKeyDown={(e) => {
+                                if (e.key === "Tab") { e.preventDefault(); setEditingNoteIndent((i) => e.shiftKey ? Math.max(0, i - 1) : Math.min(2, i + 1)); }
+                                if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); saveNoteEdit(activeChapter.id, note.id); }
+                                if (e.key === "Escape") setEditingNoteId(null);
+                              }}
+                              onBlur={() => saveNoteEdit(activeChapter.id, note.id)}
+                              className="flex-1 border border-amber-500 rounded px-2 py-0.5 text-sm text-ink-900 focus:outline-none bg-white resize-none overflow-hidden leading-snug"
+                            />
+                          </div>
+                        ) : (
+                          <span className="flex-1 text-sm text-ink-800 leading-relaxed">{note.text}</span>
+                        )}
+                        {editingNoteId !== note.id && (
+                          <div className="flex gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0 mt-0.5">
+                            <button onClick={() => changeNoteIndent(activeChapter.id, note.id, -1)} disabled={level === 0}
+                              className="text-ink-300 hover:text-ink-700 disabled:opacity-20 text-xs px-1 py-0.5 rounded hover:bg-parchment-200" title="Outdent">←</button>
+                            <button onClick={() => changeNoteIndent(activeChapter.id, note.id, 1)} disabled={level === 2}
+                              className="text-ink-300 hover:text-ink-700 disabled:opacity-20 text-xs px-1 py-0.5 rounded hover:bg-parchment-200" title="Indent">→</button>
+                            <button onClick={() => { setEditingNoteId(note.id); setEditingNoteText(note.text); setEditingNoteIndent(level); setEditingNoteType(note.type ?? "bullet"); }}
+                              className="text-ink-300 hover:text-ink-700 text-xs p-0.5">✎</button>
+                            <button onClick={() => deleteNote(activeChapter.id, note.id)}
+                              className="text-ink-300 hover:text-red-500 text-sm p-0.5 leading-none">×</button>
+                          </div>
+                        )}
+                      </li>
+                    );
+                  };
+
                   return (
-                    <ul className={ulCls}>
-                      {activeChapter.notes.map((note) => {
-                        const level = Math.min(note.indent ?? 0, 2);
-                        const isNumbered = (note.type ?? "bullet") === "numbered";
-                        const marker = isNumbered
-                          ? `${numMap.get(note.id)}.`
-                          : BULLET_CHAR[level];
-                        return (
-                          <li key={note.id} className={`group flex items-start gap-2${cols > 1 ? " break-inside-avoid mb-1" : ""}`} style={{ paddingLeft: INDENT_PX[level] }}>
-                            <span className={`mt-0.5 flex-shrink-0 text-sm leading-tight select-none min-w-[1.25rem] text-right ${BULLET_COLOR[level]}`}>
-                              {marker}
-                            </span>
-                            {editingNoteId === note.id ? (
-                              <div className="flex-1 flex items-center gap-2">
-                                <button
-                                  onClick={() => setEditingNoteType((t) => t === "bullet" ? "numbered" : "bullet")}
-                                  className="flex-shrink-0 text-xs border border-parchment-300 rounded px-1.5 py-0.5 text-ink-500 hover:border-amber-500 hover:text-amber-600 transition-colors"
-                                  title="Toggle bullet / numbered"
-                                >
-                                  {editingNoteType === "numbered" ? "1." : "•"}
-                                </button>
-                                <textarea
-                                  autoFocus
-                                  rows={1}
-                                  ref={(el) => { if (el) { el.style.height = "auto"; el.style.height = el.scrollHeight + "px"; } }}
-                                  value={editingNoteText}
-                                  onChange={(e) => {
-                                    setEditingNoteText(e.target.value);
-                                    e.target.style.height = "auto";
-                                    e.target.style.height = e.target.scrollHeight + "px";
-                                  }}
-                                  onKeyDown={(e) => {
-                                    if (e.key === "Tab") { e.preventDefault(); setEditingNoteIndent((i) => e.shiftKey ? Math.max(0, i - 1) : Math.min(2, i + 1)); }
-                                    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); saveNoteEdit(activeChapter.id, note.id); }
-                                    if (e.key === "Escape") setEditingNoteId(null);
-                                  }}
-                                  onBlur={() => saveNoteEdit(activeChapter.id, note.id)}
-                                  className="flex-1 border border-amber-500 rounded px-2 py-0.5 text-sm text-ink-900 focus:outline-none bg-white resize-none overflow-hidden leading-snug"
-                                />
-                              </div>
-                            ) : (
-                              <span className="flex-1 text-sm text-ink-800 leading-relaxed">{note.text}</span>
-                            )}
-                            {editingNoteId !== note.id && (
-                              <div className="flex gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0 mt-0.5">
-                                <button onClick={() => changeNoteIndent(activeChapter.id, note.id, -1)} disabled={level === 0}
-                                  className="text-ink-300 hover:text-ink-700 disabled:opacity-20 text-xs px-1 py-0.5 rounded hover:bg-parchment-200" title="Outdent">←</button>
-                                <button onClick={() => changeNoteIndent(activeChapter.id, note.id, 1)} disabled={level === 2}
-                                  className="text-ink-300 hover:text-ink-700 disabled:opacity-20 text-xs px-1 py-0.5 rounded hover:bg-parchment-200" title="Indent">→</button>
-                                <button onClick={() => { setEditingNoteId(note.id); setEditingNoteText(note.text); setEditingNoteIndent(level); setEditingNoteType(note.type ?? "bullet"); }}
-                                  className="text-ink-300 hover:text-ink-700 text-xs p-0.5">✎</button>
-                                <button onClick={() => deleteNote(activeChapter.id, note.id)}
-                                  className="text-ink-300 hover:text-red-500 text-sm p-0.5 leading-none">×</button>
-                              </div>
-                            )}
-                          </li>
-                        );
+                    <div className="space-y-1">
+                      {groups.map((group, gi) => {
+                        const c = group.type === "numbered"
+                          ? (group.notes.length > 50 ? 4 : group.notes.length > 25 ? 3 : group.notes.length > 10 ? 2 : 1)
+                          : 1;
+                        const ulCls = c === 4 ? "columns-4 gap-x-6" : c === 3 ? "columns-3 gap-x-6" : c === 2 ? "columns-2 gap-x-6" : "space-y-1";
+                        return <ul key={gi} className={ulCls}>{group.notes.map(n => renderNote(n, c))}</ul>;
                       })}
-                    </ul>
+                    </div>
                   );
                 })()}
               </div>
