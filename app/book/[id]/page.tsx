@@ -138,9 +138,17 @@ function normalizeDictation(text: string): string {
   // Remove space before closing punctuation / inside an opening paren
   out = out.replace(/\s+([.,!?;:)])/g, "$1");
   out = out.replace(/(\()\s+/g, "$1");
-  // Remove space after opening quote and before closing quote
-  out = out.replace(/"(\s+)/g, "\"");
-  out = out.replace(/(\s+)"/g, "\"");
+  // Fix quote spacing: opening " gets space-before/no-space-after, closing " gets no-space-before/space-after.
+  // Quotes alternate open/close so we use a counter to tell them apart.
+  {
+    let qn = 0;
+    out = out.replace(/(\s*)"(\s*)/g, (_m, pre: string, post: string) => {
+      qn++;
+      return qn % 2 === 1
+        ? (pre.length ? " " : "") + "\""          // opening: one space before (unless at start), nothing after
+        : "\"" + (post.length ? " " : "");         // closing: nothing before, one space after (unless at end)
+    });
+  }
   // Ensure a single space after sentence-ending punctuation when a letter follows
   out = out.replace(/([.!?])\s*([a-z])/g, "$1 $2");
   // Capitalize the first letter of the whole string
