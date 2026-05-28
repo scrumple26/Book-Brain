@@ -747,20 +747,24 @@ export default function BookPage() {
 
               {/* Notes list */}
               <div className="flex-1 overflow-y-auto px-8 py-5">
-                {activeChapter.notes.length === 0 ? (
-                  <p className="text-ink-300 text-sm italic">No notes yet. Add your first note below.</p>
-                ) : (
-                  <ul className="space-y-1">
-                    {(() => {
-                      const numMap = buildNumberMap(activeChapter.notes);
-                      return activeChapter.notes.map((note) => {
+                {(() => {
+                  if (activeChapter.notes.length === 0) {
+                    return <p className="text-ink-300 text-sm italic">No notes yet. Add your first note below.</p>;
+                  }
+                  const numMap = buildNumberMap(activeChapter.notes);
+                  const numberedCount = activeChapter.notes.filter(n => (n.type ?? "bullet") === "numbered").length;
+                  const cols = numberedCount > 50 ? 4 : numberedCount > 25 ? 3 : numberedCount > 10 ? 2 : 1;
+                  const ulCls = cols === 4 ? "columns-4 gap-x-6" : cols === 3 ? "columns-3 gap-x-6" : cols === 2 ? "columns-2 gap-x-6" : "space-y-1";
+                  return (
+                    <ul className={ulCls}>
+                      {activeChapter.notes.map((note) => {
                         const level = Math.min(note.indent ?? 0, 2);
                         const isNumbered = (note.type ?? "bullet") === "numbered";
                         const marker = isNumbered
                           ? `${numMap.get(note.id)}.`
                           : BULLET_CHAR[level];
                         return (
-                          <li key={note.id} className="group flex items-start gap-2" style={{ paddingLeft: INDENT_PX[level] }}>
+                          <li key={note.id} className={`group flex items-start gap-2${cols > 1 ? " break-inside-avoid mb-1" : ""}`} style={{ paddingLeft: INDENT_PX[level] }}>
                             <span className={`mt-0.5 flex-shrink-0 text-sm leading-tight select-none min-w-[1.25rem] text-right ${BULLET_COLOR[level]}`}>
                               {marker}
                             </span>
@@ -809,10 +813,10 @@ export default function BookPage() {
                             )}
                           </li>
                         );
-                      });
-                    })()}
-                  </ul>
-                )}
+                      })}
+                    </ul>
+                  );
+                })()}
               </div>
 
               {/* Note input */}
