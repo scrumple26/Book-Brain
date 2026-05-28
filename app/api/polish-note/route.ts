@@ -51,9 +51,9 @@ export async function POST(req: NextRequest) {
         systemInstruction: { parts: [{ text: SYSTEM }] },
         contents: [{ parts: [{ text: raw }] }],
         generationConfig: {
-          temperature: 1,
+          temperature: 0.2,
           maxOutputTokens: 2048,
-          thinkingConfig: { thinkingBudget: 5000 },
+          thinkingConfig: { thinkingBudget: 0 },
         },
       }),
     },
@@ -66,7 +66,8 @@ export async function POST(req: NextRequest) {
 
   const data = await res.json().catch(() => null);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const polished = (data as any)?.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
+  const parts: { text?: string; thought?: boolean }[] = (data as any)?.candidates?.[0]?.content?.parts ?? [];
+  const polished = parts.find((p) => !p.thought && p.text)?.text?.trim();
   if (!polished) {
     return NextResponse.json({ error: "Empty response from Gemini" }, { status: 502 });
   }

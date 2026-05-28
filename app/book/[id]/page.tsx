@@ -514,8 +514,7 @@ export default function BookPage() {
       if (!res.ok) return raw;
       const data = await res.json();
       const result = typeof data?.text === "string" && data.text.trim() ? data.text.trim() : raw;
-      const wordCount = (s: string) => s.trim().split(/\s+/).length;
-      return wordCount(result) >= wordCount(raw) * 0.70 ? result : raw;
+      return result;
     } catch {
       return raw;
     } finally {
