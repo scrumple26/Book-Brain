@@ -201,7 +201,12 @@ export default function BookPage() {
         const transcript = e.results[i][0].transcript as string;
         if (e.results[i].isFinal) {
           const trimmed = transcript.trim();
-          if (/^new\s+bullet[\s.,!?]*$/i.test(trimmed)) {
+          // Match "new bullet" or "next bullet" anywhere at the end of the segment
+          // so Chrome lumping words together doesn't miss the command
+          const bulletCmd = trimmed.match(/^(.*?)\s*\b(?:new|next)\s+bullet[\s.,!?]*$/i);
+          if (bulletCmd) {
+            const chunk = bulletCmd[1].trim();
+            if (chunk) finalDictatedRef.value += (finalDictatedRef.value ? " " : "") + chunk;
             const raw = [baseText, finalDictatedRef.value].filter(Boolean).join(" ").trim();
             const noteText = normalizeDictation(raw);
             if (noteText) addNoteRef.current(noteText);
@@ -369,8 +374,8 @@ export default function BookPage() {
     noteInputRef.current?.focus();
 
     if (fromDictation) {
-      // Strip any stray "new bullet" voice commands captured in the transcript
-      text = text.replace(/\bnew\s+bullet\b[\s.,!?]*/gi, "").trim();
+      // Strip any stray "new/next bullet" voice commands captured in the transcript
+      text = text.replace(/\b(?:new|next)\s+bullet\b[\s.,!?]*/gi, "").trim();
       if (!text) return;
       setPolishing(true);
       text = await polishWithGemini(text);
@@ -829,7 +834,7 @@ export default function BookPage() {
                 </div>
                 <p className="text-xs text-ink-300 mt-1.5 ml-20">
                   Tab = indent · Shift+Tab = outdent · Enter = add
-                  {speechSupported && " · 🎤 = dictate · say \"new bullet\" / \"indent\" / \"outdent\""}
+                  {speechSupported && " · 🎤 = dictate · say \"new bullet\" or \"next bullet\" / \"indent\" / \"outdent\""}
                   {polishing && (
                     <span className="ml-2 text-amber-600 font-medium">✨ polishing…</span>
                   )}
