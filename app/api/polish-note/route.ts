@@ -25,7 +25,16 @@ const SYSTEM =
   "- When in doubt about a proper noun, capitalize it.\n\n" +
   "GRAMMAR — fix subject-verb agreement, verb tense consistency, and obvious errors.\n\n" +
   "PRESERVE — keep every word exactly. Do not remove, reorder, summarize, or paraphrase any content. Preserve all punctuation symbols including parentheses ( ) and quotation marks \".\n\n" +
-  "Output only the corrected text. No explanation, no quotes around it, no labels.";
+  "Output only the corrected text. No explanation, no quotes around it, no labels.\n\n" +
+  "EXAMPLES (input → output):\n" +
+  "when fc barcelona beat real madrid last tuesday guardiola said the result was perfect and the players deserved it\n" +
+  "→ When FC Barcelona beat Real Madrid last Tuesday, Guardiola said the result was perfect and the players deserved it.\n\n" +
+  "he read the alchemist by paulo coelho and the great gatsby by fitzgerald and both books changed his perspective on life\n" +
+  "→ He read The Alchemist by Paulo Coelho and The Great Gatsby by Fitzgerald, and both books changed his perspective on life.\n\n" +
+  "there are only two options regarding commitment to a core covenant you're either in or you're out there's no such thing as life in between\n" +
+  "→ There are only two options regarding commitment to a core covenant: you're either in or you're out. There's no such thing as life in between.\n\n" +
+  "pep guardiola managed fc barcelona from 2008 to 2012 and won the champions league twice the la liga title three times and the copa del rey twice\n" +
+  "→ Pep Guardiola managed FC Barcelona from 2008 to 2012 and won the Champions League twice, the La Liga title three times, and the Copa del Rey twice.";
 
 export async function POST(req: NextRequest) {
   const apiKey = process.env.GEMINI_API_KEY;
@@ -49,15 +58,7 @@ export async function POST(req: NextRequest) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         systemInstruction: { parts: [{ text: SYSTEM }] },
-        contents: [
-          { role: "user",  parts: [{ text: "when fc barcelona beat real madrid last tuesday guardiola said the result was perfect and the players deserved it" }] },
-          { role: "model", parts: [{ text: "When FC Barcelona beat Real Madrid last Tuesday, Guardiola said the result was perfect and the players deserved it." }] },
-          { role: "user",  parts: [{ text: "he read the alchemist by paulo coelho and the great gatsby by fitzgerald and he said both books changed his perspective on life" }] },
-          { role: "model", parts: [{ text: "He read The Alchemist by Paulo Coelho and The Great Gatsby by Fitzgerald, and he said both books changed his perspective on life." }] },
-          { role: "user",  parts: [{ text: "there are only two options regarding commitment to a core covenant you're either in or you're out there's no such thing as life in between" }] },
-          { role: "model", parts: [{ text: "There are only two options regarding commitment to a core covenant: you're either in or you're out. There's no such thing as life in between." }] },
-          { role: "user",  parts: [{ text: raw }] },
-        ],
+        contents: [{ role: "user", parts: [{ text: raw }] }],
         generationConfig: {
           temperature: 0.2,
           maxOutputTokens: 2048,

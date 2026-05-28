@@ -503,7 +503,7 @@ export default function BookPage() {
 
   async function polishWithGemini(raw: string): Promise<string> {
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 25000);
+    const timer = setTimeout(() => controller.abort(), 45000);
     try {
       const res = await fetch("/api/polish-note", {
         method: "POST",
