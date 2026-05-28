@@ -349,7 +349,10 @@ export default function BookPage() {
       if (!res.ok) return raw;
       const data = await res.json();
       const result = typeof data?.text === "string" && data.text.trim() ? data.text.trim() : raw;
-      return /[.!?]$/.test(result) ? result : result + ".";
+      // Fall back to original if Gemini dropped a significant portion of the content
+      const wordCount = (s: string) => s.trim().split(/\s+/).length;
+      const safe = wordCount(result) >= wordCount(raw) * 0.85 ? result : raw;
+      return /[.!?]$/.test(safe) ? safe : safe + ".";
     } catch {
       return raw;
     }
