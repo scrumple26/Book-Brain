@@ -200,11 +200,14 @@ export default function BookPage() {
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     rec.onresult = (e: any) => {
-      // If the user manually edited the field, sync accumulated state to what they left
+      // If the user manually edited the field, sync accumulated state to what they left.
+      // hadManualEdit lets command handlers discard Chrome audio that predates the edit.
+      let hadManualEdit = false;
       if (manualEditRef.current !== null) {
         baseText = manualEditRef.current.trimEnd();
         finalDictatedRef.value = "";
         manualEditRef.current = null;
+        hadManualEdit = true;
       }
       cameFromDictationRef.current = true;
       let interim = "";
@@ -237,7 +240,8 @@ export default function BookPage() {
           const chapterCmd = trimmed.match(/^(.*?)\s*\bnew\s+chapter[\s.,!?]*$/i);
           if (chapterCmd) {
             const chunk = chapterCmd[1].trim();
-            if (chunk) finalDictatedRef.value += (finalDictatedRef.value ? " " : "") + chunk;
+            // Discard pre-command audio if the user just backspaced — it predates the edit
+            if (chunk && !hadManualEdit) finalDictatedRef.value += (finalDictatedRef.value ? " " : "") + chunk;
             const raw = [baseText, finalDictatedRef.value].filter(Boolean).join(" ").trim();
             if (raw) { const nt = normalizeDictation(raw); if (nt) addNoteRef.current(nt); }
             baseText = "";
@@ -253,7 +257,8 @@ export default function BookPage() {
           const bulletCmd = trimmed.match(/^(.*?)\s*\b(?:new|next)\s+bullet[\s.,!?]*$/i);
           if (bulletCmd) {
             const chunk = bulletCmd[1].trim();
-            if (chunk) finalDictatedRef.value += (finalDictatedRef.value ? " " : "") + chunk;
+            // Discard pre-command audio if the user just backspaced — it predates the edit
+            if (chunk && !hadManualEdit) finalDictatedRef.value += (finalDictatedRef.value ? " " : "") + chunk;
             const raw = [baseText, finalDictatedRef.value].filter(Boolean).join(" ").trim();
             const noteText = normalizeDictation(raw);
             if (noteText) addNoteRef.current(noteText);
