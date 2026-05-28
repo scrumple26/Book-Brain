@@ -152,6 +152,8 @@ export default function BookPage() {
   const [editingNoteType, setEditingNoteType] = useState<"bullet" | "numbered">("bullet");
   const [listening, setListening] = useState(false);
   const [polishing, setPolishing] = useState(false);
+  const [reformatting, setReformatting] = useState(false);
+  const [reformatProgress, setReformatProgress] = useState("");
   const [awaitingChapterName, setAwaitingChapterName] = useState(false);
   const [micDevices, setMicDevices] = useState<MediaDeviceInfo[]>([]);
   const [selectedMicId, setSelectedMicId] = useState("");
@@ -418,6 +420,35 @@ export default function BookPage() {
     }
   }
 
+  async function reformatAllNotes() {
+    if (!book || reformatting) return;
+    setReformatting(true);
+    const chapters = book.chapters;
+    let total = chapters.reduce((s, c) => s + c.notes.length, 0);
+    let done = 0;
+    const updated = { ...book, chapters: await Promise.resolve(chapters).then(async (chs) => {
+      const result = [];
+      for (const chapter of chs) {
+        const newNotes = [];
+        for (const note of chapter.notes) {
+          setReformatProgress(`${done + 1} / ${total}`);
+          let text = note.text.trim();
+          if (text) {
+            text = await polishWithGemini(text);
+            if (!/[.!?]$/.test(text)) text += ".";
+          }
+          newNotes.push({ ...note, text });
+          done++;
+        }
+        result.push({ ...chapter, notes: newNotes });
+      }
+      return result;
+    }) };
+    await upsertBook(updated);
+    setReformatting(false);
+    setReformatProgress("");
+  }
+
   async function addNote(textOverride?: string) {
     if (!book || !activeChapterId) return;
     const targetChapterId = activeChapterId;
@@ -543,7 +574,7 @@ export default function BookPage() {
     <div className="min-h-screen bg-parchment-50 flex flex-col">
       {/* Header */}
       <header className="border-b border-parchment-300 bg-parchment-100 px-6 py-4 flex-shrink-0">
-        <div className="max-w-6xl mx-auto flex items-center justify-between gap-4">
+        <div className="max-w-screen-2xl mx-auto flex items-center justify-between gap-4">
           <div className="flex items-center gap-3 min-w-0">
             <button onClick={() => router.push("/")} className="text-ink-300 hover:text-amber-600 transition-colors text-sm flex-shrink-0">
               ← Library
@@ -582,6 +613,14 @@ export default function BookPage() {
               <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-ink-300 text-xs">🔍</span>
             </div>
             <button
+              onClick={reformatAllNotes}
+              disabled={reformatting}
+              className="flex items-center gap-1.5 border border-parchment-300 text-ink-500 hover:border-amber-500 hover:text-amber-600 text-xs font-medium px-3 py-2 rounded-lg transition-colors disabled:opacity-50"
+              title="Re-polish every note through Gemini"
+            >
+              {reformatting ? `Reformatting ${reformatProgress}…` : "⟳ Reformat all"}
+            </button>
+            <button
               onClick={() => exportMarkdown(book)}
               className="flex items-center gap-1.5 border border-parchment-300 text-ink-500 hover:border-amber-500 hover:text-amber-600 text-xs font-medium px-3 py-2 rounded-lg transition-colors"
             >
@@ -594,7 +633,7 @@ export default function BookPage() {
       {/* Search overlay */}
       {search.trim() && (
         <div className="border-b border-parchment-300 bg-white px-6 py-4">
-          <div className="max-w-6xl mx-auto">
+          <div className="max-w-screen-2xl mx-auto">
             <p className="text-xs text-ink-300 mb-3 uppercase tracking-wide font-medium">
               {searchResults.length} result{searchResults.length !== 1 ? "s" : ""} for &ldquo;{search}&rdquo;
             </p>
@@ -621,7 +660,7 @@ export default function BookPage() {
         </div>
       )}
 
-      <div className="flex flex-1 min-h-0 max-w-6xl mx-auto w-full">
+      <div className="flex flex-1 min-h-0 max-w-screen-2xl mx-auto w-full">
         {/* Sidebar — collapsed: thin vertical tab; expanded: full chapter list */}
         {!sidebarOpen ? (
           <aside className="w-9 flex-shrink-0 border-r border-parchment-300 bg-parchment-100">
