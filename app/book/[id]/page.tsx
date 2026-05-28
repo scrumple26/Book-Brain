@@ -150,6 +150,7 @@ export default function BookPage() {
   const [editingNoteType, setEditingNoteType] = useState<"bullet" | "numbered">("bullet");
   const [listening, setListening] = useState(false);
   const [polishing, setPolishing] = useState(false);
+  const [awaitingChapterName, setAwaitingChapterName] = useState(false);
   const [micDevices, setMicDevices] = useState<MediaDeviceInfo[]>([]);
   const [selectedMicId, setSelectedMicId] = useState("");
   const [sidebarOpen, setSidebarOpen] = useState<boolean>(() =>
@@ -161,6 +162,7 @@ export default function BookPage() {
   const recognitionRef = useRef<any>(null);
   const shouldListenRef = useRef(false);
   const micStreamRef = useRef<MediaStream | null>(null);
+  const dictationModeRef = useRef<"note" | "chapter">("note");
 
   const speechSupported =
     typeof window !== "undefined" &&
@@ -201,6 +203,39 @@ export default function BookPage() {
         const transcript = e.results[i][0].transcript as string;
         if (e.results[i].isFinal) {
           const trimmed = transcript.trim();
+
+          // Chapter-name capture mode: next utterance becomes the new chapter
+          if (dictationModeRef.current === "chapter") {
+            // Parse optional leading number: "3 The Great War" or "Chapter 3 The Great War"
+            const numMatch = trimmed.match(/^(?:chapter\s+)?(\d+)\s+(.+)/i);
+            const chapterNumber = numMatch ? numMatch[1] : "";
+            const chapterName = (numMatch ? numMatch[2] : trimmed)
+              .replace(/^chapter\s+/i, "")
+              .trim();
+            addChapterFromVoiceRef.current(chapterNumber, chapterName);
+            dictationModeRef.current = "note";
+            setAwaitingChapterName(false);
+            baseText = "";
+            finalDictatedRef.value = "";
+            setNoteInput("");
+            continue;
+          }
+
+          // "new chapter" command — save any pending note then enter chapter-name mode
+          const chapterCmd = trimmed.match(/^(.*?)\s*\bnew\s+chapter[\s.,!?]*$/i);
+          if (chapterCmd) {
+            const chunk = chapterCmd[1].trim();
+            if (chunk) finalDictatedRef.value += (finalDictatedRef.value ? " " : "") + chunk;
+            const raw = [baseText, finalDictatedRef.value].filter(Boolean).join(" ").trim();
+            if (raw) { const nt = normalizeDictation(raw); if (nt) addNoteRef.current(nt); }
+            baseText = "";
+            finalDictatedRef.value = "";
+            setNoteInput("");
+            dictationModeRef.current = "chapter";
+            setAwaitingChapterName(true);
+            continue;
+          }
+
           // Match "new bullet" or "next bullet" anywhere at the end of the segment
           // so Chrome lumping words together doesn't miss the command
           const bulletCmd = trimmed.match(/^(.*?)\s*\b(?:new|next)\s+bullet[\s.,!?]*$/i);
@@ -244,7 +279,9 @@ export default function BookPage() {
         // Chrome kills continuous recognition after silence on desktop; restart automatically
         try { startRecognition(baseText, finalDictatedRef); return; } catch { /* fall through */ }
       }
-      // Truly done — release the mic stream
+      // Truly done — release the mic stream and reset chapter mode
+      dictationModeRef.current = "note";
+      setAwaitingChapterName(false);
       micStreamRef.current?.getTracks().forEach((t) => t.stop());
       micStreamRef.current = null;
       setListening(false);
@@ -258,6 +295,8 @@ export default function BookPage() {
     if (!speechSupported) return;
     if (listening) {
       shouldListenRef.current = false;
+      dictationModeRef.current = "note";
+      setAwaitingChapterName(false);
       recognitionRef.current?.stop?.();
       // mic stream released in onend after recognition fully stops
       return;
@@ -410,6 +449,22 @@ export default function BookPage() {
   // Keep an always-fresh reference so the speech callback never holds stale state
   const addNoteRef = useRef(addNote);
   useEffect(() => { addNoteRef.current = addNote; });
+
+  function addChapterFromVoice(number: string, name: string) {
+    const current = bookRef.current;
+    if (!current || !name.trim()) return;
+    const chapter: Chapter = {
+      id: generateId(),
+      name: name.trim(),
+      notes: [],
+      ...(number ? { number } : {}),
+    };
+    const updated = { ...current, chapters: [...current.chapters, chapter] };
+    persist(updated);
+    setActiveChapterId(chapter.id);
+  }
+  const addChapterFromVoiceRef = useRef(addChapterFromVoice);
+  useEffect(() => { addChapterFromVoiceRef.current = addChapterFromVoice; });
 
   function changeNoteIndent(chapterId: string, noteId: string, delta: number) {
     if (!book) return;
@@ -789,7 +844,7 @@ export default function BookPage() {
                         if (e.key === "Tab") { e.preventDefault(); setNoteIndent((i) => e.shiftKey ? Math.max(0, i - 1) : Math.min(2, i + 1)); }
                         if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); addNote(); }
                       }}
-                      placeholder={`Add a ${noteType === "numbered" ? "numbered" : "bullet"} note… (Tab to indent)`}
+                      placeholder={awaitingChapterName ? "Say chapter name, e.g. \"1 Introduction\"…" : `Add a ${noteType === "numbered" ? "numbered" : "bullet"} note… (Tab to indent)`}
                       className="w-full bg-white border border-parchment-300 rounded-lg pl-8 pr-4 py-2.5 text-sm text-ink-900 placeholder-ink-300 focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-transparent resize-none overflow-hidden leading-snug"
                     />
                   </div>
@@ -834,7 +889,7 @@ export default function BookPage() {
                 </div>
                 <p className="text-xs text-ink-300 mt-1.5 ml-20">
                   Tab = indent · Shift+Tab = outdent · Enter = add
-                  {speechSupported && " · 🎤 = dictate · say \"new bullet\" or \"next bullet\" / \"indent\" / \"outdent\""}
+                  {speechSupported && ` · 🎤 = dictate · ${awaitingChapterName ? "now say chapter name…" : "\"new/next bullet\" · \"new chapter\" · \"indent\" / \"outdent\""}`}
                   {polishing && (
                     <span className="ml-2 text-amber-600 font-medium">✨ polishing…</span>
                   )}
