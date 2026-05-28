@@ -201,7 +201,7 @@ export default function BookPage() {
         const transcript = e.results[i][0].transcript as string;
         if (e.results[i].isFinal) {
           const trimmed = transcript.trim();
-          if (/^next[\s.,!?]*$/i.test(trimmed)) {
+          if (/^new\s+bullet[\s.,!?]*$/i.test(trimmed)) {
             const raw = [baseText, finalDictatedRef.value].filter(Boolean).join(" ").trim();
             const noteText = normalizeDictation(raw);
             if (noteText) addNoteRef.current(noteText);
@@ -824,7 +824,7 @@ export default function BookPage() {
                 </div>
                 <p className="text-xs text-ink-300 mt-1.5 ml-20">
                   Tab = indent · Shift+Tab = outdent · Enter = add
-                  {speechSupported && " · 🎤 = dictate · say \"next\" / \"indent\" / \"outdent\""}
+                  {speechSupported && " · 🎤 = dictate · say \"new bullet\" / \"indent\" / \"outdent\""}
                   {polishing && (
                     <span className="ml-2 text-amber-600 font-medium">✨ polishing…</span>
                   )}
