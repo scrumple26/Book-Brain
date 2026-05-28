@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 
 export const runtime = "edge";
 
-const MODEL = "gemini-1.5-flash";
+const MODEL = "gemini-2.0-flash-lite";
 
 const SYSTEM =
   "You are a grammar proofreader for voice-dictated notes. For every input, work through this checklist in order and fix every instance you find. Do not skip any check.\n\n" +
