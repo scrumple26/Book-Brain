@@ -540,7 +540,6 @@ export default function BookPage() {
         const newNotes = [];
         for (const note of chapter.notes) {
           setReformatProgress(`${done + 1} / ${total}`);
-          if (done > 0) await new Promise((res) => setTimeout(res, 4000));
           let text = note.text.trim();
           if (text) {
             const r = await polishWithGemini(text);
@@ -571,7 +570,6 @@ export default function BookPage() {
     const errors: string[] = [];
     for (let i = 0; i < chapter.notes.length; i++) {
       setReformatChapterProgress(`${i + 1} / ${total}`);
-      if (i > 0) await new Promise((res) => setTimeout(res, 4000));
       const note = chapter.notes[i];
       let text = note.text.trim();
       if (text) {
