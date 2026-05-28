@@ -216,9 +216,12 @@ export default function BookPage() {
             // Parse optional leading number: "3 The Great War" or "Chapter 3 The Great War"
             const numMatch = trimmed.match(/^(?:chapter\s+)?(\d+)\s+(.+)/i);
             const chapterNumber = numMatch ? numMatch[1] : "";
-            const chapterName = (numMatch ? numMatch[2] : trimmed)
+            const rawName = (numMatch ? numMatch[2] : trimmed)
               .replace(/^chapter\s+/i, "")
               .trim();
+            // Apply punctuation normalization then title-case every word
+            const normalizedName = normalizeDictation(rawName);
+            const chapterName = normalizedName.replace(/\b\w/g, (c) => c.toUpperCase());
             addChapterFromVoiceRef.current(chapterNumber, chapterName);
             dictationModeRef.current = "note";
             setAwaitingChapterName(false);
