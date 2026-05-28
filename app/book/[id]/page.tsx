@@ -193,6 +193,8 @@ export default function BookPage() {
   const [polishing, setPolishing] = useState(false);
   const [reformatting, setReformatting] = useState(false);
   const [reformatProgress, setReformatProgress] = useState("");
+  const [reformattingChapter, setReformattingChapter] = useState(false);
+  const [reformatChapterProgress, setReformatChapterProgress] = useState("");
   const [awaitingChapterName, setAwaitingChapterName] = useState(false);
   const [dragNoteId, setDragNoteId] = useState<string | null>(null);
   const dragNoteIdRef = useRef<string | null>(null);
@@ -551,6 +553,30 @@ export default function BookPage() {
     setReformatProgress("");
   }
 
+  async function reformatCurrentChapter() {
+    if (!book || !activeChapterId || reformattingChapter) return;
+    const chapter = book.chapters.find((c) => c.id === activeChapterId);
+    if (!chapter) return;
+    setReformattingChapter(true);
+    const total = chapter.notes.length;
+    const newNotes = [];
+    for (let i = 0; i < chapter.notes.length; i++) {
+      setReformatChapterProgress(`${i + 1} / ${total}`);
+      const note = chapter.notes[i];
+      let text = note.text.trim();
+      if (text && text.split(/\s+/).length >= 4) {
+        text = await polishWithGemini(text);
+        if (!/[.!?]$/.test(text)) text += ".";
+      }
+      newNotes.push({ ...note, text });
+    }
+    const updated = { ...book, chapters: book.chapters.map((c) => c.id === activeChapterId ? { ...c, notes: newNotes } : c) };
+    await upsertBook(updated);
+    setBook(updated);
+    setReformattingChapter(false);
+    setReformatChapterProgress("");
+  }
+
   async function addNote(textOverride?: string) {
     if (!book || !activeChapterId) return;
     const targetChapterId = activeChapterId;
@@ -742,8 +768,16 @@ export default function BookPage() {
               <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-ink-300 text-xs">🔍</span>
             </div>
             <button
+              onClick={reformatCurrentChapter}
+              disabled={reformattingChapter || reformatting}
+              className="flex items-center gap-1.5 border border-parchment-300 text-ink-500 hover:border-amber-500 hover:text-amber-600 text-xs font-medium px-3 py-2 rounded-lg transition-colors disabled:opacity-50"
+              title="Polish every note in this chapter"
+            >
+              {reformattingChapter ? `Polishing ${reformatChapterProgress}…` : "✨ Polish chapter"}
+            </button>
+            <button
               onClick={reformatAllNotes}
-              disabled={reformatting}
+              disabled={reformatting || reformattingChapter}
               className="flex items-center gap-1.5 border border-parchment-300 text-ink-500 hover:border-amber-500 hover:text-amber-600 text-xs font-medium px-3 py-2 rounded-lg transition-colors disabled:opacity-50"
               title="Re-polish every note through Gemini"
             >
