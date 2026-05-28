@@ -155,7 +155,7 @@ export default function BookPage() {
   const [sidebarOpen, setSidebarOpen] = useState<boolean>(() =>
     typeof window === "undefined" ? true : window.innerWidth >= 768
   );
-  const noteInputRef = useRef<HTMLInputElement>(null);
+  const noteInputRef = useRef<HTMLTextAreaElement>(null);
   const cameFromDictationRef = useRef(false);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const recognitionRef = useRef<any>(null);
@@ -679,18 +679,22 @@ export default function BookPage() {
                                 >
                                   {editingNoteType === "numbered" ? "1." : "•"}
                                 </button>
-                                <input
+                                <textarea
                                   autoFocus
-                                  type="text"
+                                  rows={1}
                                   value={editingNoteText}
-                                  onChange={(e) => setEditingNoteText(e.target.value)}
+                                  onChange={(e) => {
+                                    setEditingNoteText(e.target.value);
+                                    e.target.style.height = "auto";
+                                    e.target.style.height = e.target.scrollHeight + "px";
+                                  }}
                                   onKeyDown={(e) => {
                                     if (e.key === "Tab") { e.preventDefault(); setEditingNoteIndent((i) => e.shiftKey ? Math.max(0, i - 1) : Math.min(2, i + 1)); }
-                                    if (e.key === "Enter") saveNoteEdit(activeChapter.id, note.id);
+                                    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); saveNoteEdit(activeChapter.id, note.id); }
                                     if (e.key === "Escape") setEditingNoteId(null);
                                   }}
                                   onBlur={() => saveNoteEdit(activeChapter.id, note.id)}
-                                  className="flex-1 border border-amber-500 rounded px-2 py-0.5 text-sm text-ink-900 focus:outline-none bg-white"
+                                  className="flex-1 border border-amber-500 rounded px-2 py-0.5 text-sm text-ink-900 focus:outline-none bg-white resize-none overflow-hidden leading-snug"
                                 />
                               </div>
                             ) : (
@@ -748,22 +752,22 @@ export default function BookPage() {
                         {noteType === "numbered" ? "#." : BULLET_CHAR[noteIndent]}
                       </span>
                     </div>
-                    <input
+                    <textarea
                       ref={noteInputRef}
-                      type="text"
+                      rows={1}
                       value={noteInput}
                       onChange={(e) => {
                         setNoteInput(e.target.value);
-                        // Manual typing while not dictating means the user is editing;
-                        // skip the polish round-trip on save.
+                        e.target.style.height = "auto";
+                        e.target.style.height = e.target.scrollHeight + "px";
                         if (!listening) cameFromDictationRef.current = false;
                       }}
                       onKeyDown={(e) => {
                         if (e.key === "Tab") { e.preventDefault(); setNoteIndent((i) => e.shiftKey ? Math.max(0, i - 1) : Math.min(2, i + 1)); }
-                        if (e.key === "Enter") addNote();
+                        if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); addNote(); }
                       }}
                       placeholder={`Add a ${noteType === "numbered" ? "numbered" : "bullet"} note… (Tab to indent)`}
-                      className="w-full bg-white border border-parchment-300 rounded-lg pl-8 pr-4 py-2.5 text-sm text-ink-900 placeholder-ink-300 focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-transparent"
+                      className="w-full bg-white border border-parchment-300 rounded-lg pl-8 pr-4 py-2.5 text-sm text-ink-900 placeholder-ink-300 focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-transparent resize-none overflow-hidden leading-snug"
                     />
                   </div>
                   {speechSupported && (
