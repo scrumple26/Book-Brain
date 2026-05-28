@@ -326,6 +326,12 @@ export default function BookPage() {
     rec.onend = () => {
       if (recognitionRef.current !== rec) return; // stale callback from a previous session
       if (shouldListenRef.current) {
+        // Flush any pending manual edit before restarting so the new instance has the correct baseText
+        if (manualEditRef.current !== null) {
+          baseText = manualEditRef.current.trimEnd();
+          finalDictatedRef.value = "";
+          manualEditRef.current = null;
+        }
         // Chrome kills continuous recognition after silence on desktop; restart automatically
         try { startRecognition(baseText, finalDictatedRef); return; } catch { /* fall through */ }
       }
