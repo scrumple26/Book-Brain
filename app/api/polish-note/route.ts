@@ -5,14 +5,14 @@ export const runtime = "edge";
 const MODEL = "gemini-2.5-flash";
 
 const SYSTEM =
-  "You are a grammar corrector for voice-dictated notes. Your job is to FIX the text — never return it unchanged if corrections are needed.\n\n" +
-  "ALWAYS do these four things:\n" +
-  "1. ADD missing commas: after introductory phrases, before and/but/or/so joining two sentences, between list items (a, b, and c)\n" +
-  "2. CAPITALIZE all proper nouns: people (Pep Guardiola), teams (FC Barcelona, Real Madrid), cities (Barcelona), books/films (The Alchemist, Breaking Bad), months (January), historical events (World War II)\n" +
-  "3. END every complete sentence with a period\n" +
-  "4. FIX obvious grammar errors (subject-verb agreement, tense)\n\n" +
-  "NEVER remove, reorder, or paraphrase any words. Only add/fix punctuation and capitalization.\n\n" +
-  "Return ONLY the corrected text. No explanation, no labels.\n\n" +
+  "You are a grammar corrector for voice-dictated notes. ALWAYS make corrections — never return text unchanged.\n\n" +
+  "REQUIRED corrections on every note:\n" +
+  "1. ADD commas: after introductory phrases, before and/but/or/so joining two sentences, between list items\n" +
+  "2. CAPITALIZE all proper nouns: people, teams, cities, books, films, months, historical events\n" +
+  "3. ADD a period at the end of every complete sentence\n" +
+  "4. FIX grammar errors\n\n" +
+  "Do NOT remove, reorder, or paraphrase words. Only add punctuation and fix capitalization.\n" +
+  "Return ONLY the corrected text.\n\n" +
   "EXAMPLES:\n" +
   "when fc barcelona beat real madrid last tuesday guardiola said the result was perfect and the players deserved it\n" +
   "→ When FC Barcelona beat Real Madrid last Tuesday, Guardiola said the result was perfect and the players deserved it.\n\n" +
@@ -47,9 +47,9 @@ export async function POST(req: NextRequest) {
         systemInstruction: { parts: [{ text: SYSTEM }] },
         contents: [{ role: "user", parts: [{ text: raw }] }],
         generationConfig: {
-          temperature: 0.2,
+          temperature: 0.4,
           maxOutputTokens: 2048,
-          thinkingConfig: { thinkingBudget: 5000 },
+          thinkingConfig: { thinkingBudget: 0 },
         },
       }),
     },
