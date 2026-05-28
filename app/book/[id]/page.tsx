@@ -195,6 +195,7 @@ export default function BookPage() {
   const [reformatProgress, setReformatProgress] = useState("");
   const [awaitingChapterName, setAwaitingChapterName] = useState(false);
   const [dragNoteId, setDragNoteId] = useState<string | null>(null);
+  const dragNoteIdRef = useRef<string | null>(null);
   const [dragOverNoteId, setDragOverNoteId] = useState<string | null>(null);
   const [moveMenuNoteId, setMoveMenuNoteId] = useState<string | null>(null);
   const [micDevices, setMicDevices] = useState<MediaDeviceInfo[]>([]);
@@ -982,11 +983,12 @@ export default function BookPage() {
                         className={`group relative flex items-start gap-2${cols > 1 ? " break-inside-avoid mb-1" : ""}${isDragTarget ? " border-t-2 border-amber-400" : " border-t-2 border-transparent"}`}
                         style={{ paddingLeft: INDENT_PX[level] }}
                         draggable={editingNoteId !== note.id}
-                        onDragStart={(e) => { setDragNoteId(note.id); e.dataTransfer.effectAllowed = "move"; }}
-                        onDragOver={(e) => { e.preventDefault(); if (dragNoteId && dragNoteId !== note.id) setDragOverNoteId(note.id); }}
+                        onDragStart={(e) => { dragNoteIdRef.current = note.id; setDragNoteId(note.id); e.dataTransfer.effectAllowed = "move"; }}
+                        onDragEnter={(e) => { e.preventDefault(); }}
+                        onDragOver={(e) => { e.preventDefault(); if (dragNoteIdRef.current && dragNoteIdRef.current !== note.id) setDragOverNoteId(note.id); }}
                         onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node)) setDragOverNoteId(null); }}
-                        onDrop={(e) => { e.preventDefault(); if (dragNoteId && dragNoteId !== note.id) reorderNote(activeChapter.id, dragNoteId, note.id); setDragNoteId(null); setDragOverNoteId(null); }}
-                        onDragEnd={() => { setDragNoteId(null); setDragOverNoteId(null); }}
+                        onDrop={(e) => { e.preventDefault(); const from = dragNoteIdRef.current; if (from && from !== note.id) reorderNote(activeChapter.id, from, note.id); dragNoteIdRef.current = null; setDragNoteId(null); setDragOverNoteId(null); }}
+                        onDragEnd={() => { dragNoteIdRef.current = null; setDragNoteId(null); setDragOverNoteId(null); }}
                       >
                         <span className="opacity-0 group-hover:opacity-100 cursor-grab active:cursor-grabbing mt-1 flex-shrink-0 text-ink-200 hover:text-ink-400 select-none text-xs leading-none" title="Drag to reorder">⠿</span>
                         <span className={`mt-0.5 flex-shrink-0 text-sm leading-tight select-none min-w-[1.25rem] text-right ${BULLET_COLOR[level]}`}>
