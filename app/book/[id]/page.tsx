@@ -163,6 +163,7 @@ export default function BookPage() {
   const shouldListenRef = useRef(false);
   const micStreamRef = useRef<MediaStream | null>(null);
   const dictationModeRef = useRef<"note" | "chapter">("note");
+  const manualEditRef = useRef<string | null>(null);
 
   const speechSupported =
     typeof window !== "undefined" &&
@@ -197,6 +198,12 @@ export default function BookPage() {
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     rec.onresult = (e: any) => {
+      // If the user manually edited the field, sync accumulated state to what they left
+      if (manualEditRef.current !== null) {
+        baseText = manualEditRef.current.trimEnd();
+        finalDictatedRef.value = "";
+        manualEditRef.current = null;
+      }
       cameFromDictationRef.current = true;
       let interim = "";
       for (let i = e.resultIndex; i < e.results.length; i++) {
@@ -838,7 +845,12 @@ export default function BookPage() {
                         setNoteInput(e.target.value);
                         e.target.style.height = "auto";
                         e.target.style.height = e.target.scrollHeight + "px";
-                        if (!listening) cameFromDictationRef.current = false;
+                        if (listening) {
+                          // Tell the next onresult to reset accumulated speech to this value
+                          manualEditRef.current = e.target.value;
+                        } else {
+                          cameFromDictationRef.current = false;
+                        }
                       }}
                       onKeyDown={(e) => {
                         if (e.key === "Tab") { e.preventDefault(); setNoteIndent((i) => e.shiftKey ? Math.max(0, i - 1) : Math.min(2, i + 1)); }
