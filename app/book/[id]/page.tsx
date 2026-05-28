@@ -498,20 +498,24 @@ export default function BookPage() {
   }
 
   async function polishWithGemini(raw: string): Promise<string> {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 25000);
     try {
       const res = await fetch("/api/polish-note", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ text: raw }),
+        signal: controller.signal,
       });
       if (!res.ok) return raw;
       const data = await res.json();
       const result = typeof data?.text === "string" && data.text.trim() ? data.text.trim() : raw;
-      // Fall back to original if Gemini dropped a significant portion of the content
       const wordCount = (s: string) => s.trim().split(/\s+/).length;
-      return wordCount(result) >= wordCount(raw) * 0.85 ? result : raw;
+      return wordCount(result) >= wordCount(raw) * 0.70 ? result : raw;
     } catch {
       return raw;
+    } finally {
+      clearTimeout(timer);
     }
   }
 
@@ -550,15 +554,15 @@ export default function BookPage() {
     let text = (textOverride ?? noteInput).trim();
     if (!text) return;
 
-    const fromDictation = cameFromDictationRef.current;
     cameFromDictationRef.current = false;
     setNoteInput("");
     noteInputRef.current?.focus();
 
-    if (fromDictation) {
-      // Strip any stray "new/next bullet" voice commands captured in the transcript
-      text = text.replace(/\b(?:new|next)\s+bullet\b[\s.,!?]*/gi, "").trim();
-      if (!text) return;
+    // Strip any stray "new/next bullet" voice commands
+    text = text.replace(/\b(?:new|next)\s+bullet\b[\s.,!?]*/gi, "").trim();
+    if (!text) return;
+
+    if (text.trim().split(/\s+/).length >= 4) {
       setPolishing(true);
       text = await polishWithGemini(text);
       setPolishing(false);
