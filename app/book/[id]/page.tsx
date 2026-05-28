@@ -935,9 +935,9 @@ export default function BookPage() {
                             <button
                               onClick={() => setEditingNoteType((t) => t === "bullet" ? "numbered" : "bullet")}
                               className="flex-shrink-0 text-xs border border-parchment-300 rounded px-1.5 py-0.5 text-ink-500 hover:border-amber-500 hover:text-amber-600 transition-colors"
-                              title="Toggle bullet / numbered"
+                              title={editingNoteType === "numbered" ? "Convert to bullet" : "Convert to numbered"}
                             >
-                              {editingNoteType === "numbered" ? "1." : "•"}
+                              {editingNoteType === "numbered" ? "→ •" : "→ 1."}
                             </button>
                             <button
                               onClick={() => setEditingNoteBold((b) => !b)}
@@ -977,6 +977,11 @@ export default function BookPage() {
                             <button onClick={() => toggleNoteBold(activeChapter.id, note.id)}
                               className={`text-xs px-1 py-0.5 rounded font-bold hover:bg-parchment-200 ${note.bold ? "text-amber-600 hover:text-amber-700" : "text-ink-300 hover:text-ink-700"}`}
                               title="Toggle bold">B</button>
+                            <button
+                              onClick={() => persist({ ...book, chapters: book.chapters.map((c) => c.id === activeChapter.id ? { ...c, notes: c.notes.map((n) => n.id === note.id ? { ...n, type: isNumbered ? "bullet" : "numbered" } : n) } : c) })}
+                              className="text-ink-300 hover:text-amber-600 text-xs px-1 py-0.5 rounded hover:bg-parchment-200"
+                              title={isNumbered ? "Convert to bullet" : "Convert to numbered"}
+                            >{isNumbered ? "•" : "1."}</button>
                             <button onClick={() => { setEditingNoteId(note.id); setEditingNoteText(note.text); setEditingNoteIndent(level); setEditingNoteType(note.type ?? "bullet"); setEditingNoteBold(note.bold ?? false); }}
                               className="text-ink-300 hover:text-ink-700 text-xs p-0.5">✎</button>
                             <button onClick={() => deleteNote(activeChapter.id, note.id)}
