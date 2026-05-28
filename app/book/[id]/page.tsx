@@ -138,6 +138,9 @@ function normalizeDictation(text: string): string {
   // Remove space before closing punctuation / inside an opening paren
   out = out.replace(/\s+([.,!?;:)])/g, "$1");
   out = out.replace(/(\()\s+/g, "$1");
+  // Remove space after opening quote and before closing quote
+  out = out.replace(/"(\s+)/g, "\"");
+  out = out.replace(/(\s+)"/g, "\"");
   // Ensure a single space after sentence-ending punctuation when a letter follows
   out = out.replace(/([.!?])\s*([a-z])/g, "$1 $2");
   // Capitalize the first letter of the whole string
