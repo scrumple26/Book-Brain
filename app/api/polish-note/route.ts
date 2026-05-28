@@ -49,7 +49,15 @@ export async function POST(req: NextRequest) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         systemInstruction: { parts: [{ text: SYSTEM }] },
-        contents: [{ parts: [{ text: raw }] }],
+        contents: [
+          { role: "user",  parts: [{ text: "when fc barcelona beat real madrid last tuesday guardiola said the result was perfect and the players deserved it" }] },
+          { role: "model", parts: [{ text: "When FC Barcelona beat Real Madrid last Tuesday, Guardiola said the result was perfect and the players deserved it." }] },
+          { role: "user",  parts: [{ text: "he read the alchemist by paulo coelho and the great gatsby by fitzgerald and he said both books changed his perspective on life" }] },
+          { role: "model", parts: [{ text: "He read The Alchemist by Paulo Coelho and The Great Gatsby by Fitzgerald, and he said both books changed his perspective on life." }] },
+          { role: "user",  parts: [{ text: "there are only two options regarding commitment to a core covenant you're either in or you're out there's no such thing as life in between" }] },
+          { role: "model", parts: [{ text: "There are only two options regarding commitment to a core covenant: you're either in or you're out. There's no such thing as life in between." }] },
+          { role: "user",  parts: [{ text: raw }] },
+        ],
         generationConfig: {
           temperature: 0.2,
           maxOutputTokens: 2048,
