@@ -150,6 +150,8 @@ export default function BookPage() {
   const [editingNoteType, setEditingNoteType] = useState<"bullet" | "numbered">("bullet");
   const [listening, setListening] = useState(false);
   const [polishing, setPolishing] = useState(false);
+  const [micDevices, setMicDevices] = useState<MediaDeviceInfo[]>([]);
+  const [selectedMicId, setSelectedMicId] = useState("");
   const [sidebarOpen, setSidebarOpen] = useState<boolean>(() =>
     typeof window === "undefined" ? true : window.innerWidth >= 768
   );
@@ -163,6 +165,16 @@ export default function BookPage() {
     typeof window !== "undefined" &&
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     !!((window as any).SpeechRecognition || (window as any).webkitSpeechRecognition);
+
+  // Enumerate audio input devices (labels only available after permission is granted)
+  function refreshMicDevices() {
+    if (!navigator.mediaDevices?.enumerateDevices) return;
+    navigator.mediaDevices.enumerateDevices()
+      .then((all) => setMicDevices(all.filter((d) => d.kind === "audioinput")))
+      .catch(() => {});
+  }
+
+  useEffect(() => { if (speechSupported) refreshMicDevices(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Stop any active recognition when the page unmounts
   useEffect(() => () => {
@@ -211,14 +223,17 @@ export default function BookPage() {
       const combined = [baseText, finalDictatedRef.value, interim.trim()].filter(Boolean).join(" ");
       setNoteInput(normalizeDictation(combined));
     };
-    rec.onerror = () => {
-      if (!shouldListenRef.current) return;
-      // Restart after transient errors (e.g. no-speech timeout on desktop Chrome)
-      try { startRecognition(baseText, finalDictatedRef); } catch { setListening(false); shouldListenRef.current = false; }
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    rec.onerror = (e: any) => {
+      // Stop permanently on permission errors; onend will always fire after and handles restart
+      if (e.error === "not-allowed" || e.error === "service-not-allowed") {
+        shouldListenRef.current = false;
+      }
     };
     rec.onend = () => {
-      // Chrome stops continuous recognition after a pause on desktop; restart if still active
+      if (recognitionRef.current !== rec) return; // stale callback from a previous session
       if (shouldListenRef.current) {
+        // Chrome kills continuous recognition after silence on desktop; restart automatically
         try { startRecognition(baseText, finalDictatedRef); return; } catch { /* fall through */ }
       }
       setListening(false);
@@ -228,7 +243,7 @@ export default function BookPage() {
     recognitionRef.current = rec;
   }
 
-  function toggleDictation() {
+  async function toggleDictation() {
     if (!speechSupported) return;
     if (listening) {
       shouldListenRef.current = false;
@@ -236,6 +251,17 @@ export default function BookPage() {
       return;
     }
     noteInputRef.current?.focus();
+
+    // Request mic permission and prime the selected device so Chrome uses it
+    try {
+      const audioConstraint = selectedMicId ? { deviceId: { ideal: selectedMicId } } : true;
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: audioConstraint });
+      stream.getTracks().forEach((t) => t.stop());
+      refreshMicDevices(); // re-enumerate now that labels are available
+    } catch {
+      return; // permission denied or device unavailable — bail without turning on the button
+    }
+
     shouldListenRef.current = true;
     const finalDictatedRef = { value: "" };
     startRecognition(noteInput.trimEnd(), finalDictatedRef);
@@ -731,17 +757,35 @@ export default function BookPage() {
                     />
                   </div>
                   {speechSupported && (
-                    <button
-                      onClick={toggleDictation}
-                      title={listening ? "Stop dictation" : "Dictate note"}
-                      className={`flex-shrink-0 text-sm px-3 py-2.5 rounded-lg transition-colors border ${
-                        listening
-                          ? "bg-red-500 hover:bg-red-400 text-white border-red-500 animate-pulse"
-                          : "bg-white text-ink-500 border-parchment-300 hover:border-amber-500 hover:text-amber-600"
-                      }`}
-                    >
-                      {listening ? "■" : "🎤"}
-                    </button>
+                    <div className="flex flex-shrink-0 items-center gap-1">
+                      {micDevices.length > 1 && (
+                        <select
+                          value={selectedMicId}
+                          onChange={(e) => setSelectedMicId(e.target.value)}
+                          disabled={listening}
+                          title="Select microphone"
+                          className="text-xs border border-parchment-300 rounded-lg px-2 py-2.5 text-ink-500 bg-white focus:outline-none focus:ring-1 focus:ring-amber-500 max-w-[130px] disabled:opacity-50"
+                        >
+                          <option value="">Default mic</option>
+                          {micDevices.map((d) => (
+                            <option key={d.deviceId} value={d.deviceId}>
+                              {d.label || `Mic ${d.deviceId.slice(0, 6)}`}
+                            </option>
+                          ))}
+                        </select>
+                      )}
+                      <button
+                        onClick={toggleDictation}
+                        title={listening ? "Stop dictation" : "Dictate note"}
+                        className={`text-sm px-3 py-2.5 rounded-lg transition-colors border ${
+                          listening
+                            ? "bg-red-500 hover:bg-red-400 text-white border-red-500 animate-pulse"
+                            : "bg-white text-ink-500 border-parchment-300 hover:border-amber-500 hover:text-amber-600"
+                        }`}
+                      >
+                        {listening ? "■" : "🎤"}
+                      </button>
+                    </div>
                   )}
                   <button
                     onClick={() => addNote()}
