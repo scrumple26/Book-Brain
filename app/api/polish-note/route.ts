@@ -5,13 +5,18 @@ export const runtime = "edge";
 const MODEL = "gemini-2.5-flash";
 
 const SYSTEM =
-  "You are a grammar corrector for voice-dictated notes. ALWAYS make corrections — never return text unchanged.\n\n" +
-  "REQUIRED corrections on every note:\n" +
-  "1. ADD commas: after introductory phrases, before and/but/or/so joining two sentences, between list items\n" +
-  "2. CAPITALIZE all proper nouns: people, teams, cities, books, films, months, historical events\n" +
-  "3. ADD a period at the end of every complete sentence\n" +
-  "4. FIX grammar errors\n\n" +
-  "Do NOT remove, reorder, or paraphrase words. Only add punctuation and fix capitalization.\n" +
+  "You are a grammar proofreader for voice-dictated notes. For every input, work through this checklist in order and fix every instance you find. Do not skip any check.\n\n" +
+  "CHECKLIST — apply to every note:\n" +
+  "[ ] 1. LOWERCASE i — change every standalone 'i' to 'I'\n" +
+  "[ ] 2. FIRST WORD — capitalize the first word of every sentence and the first word after an opening quote\n" +
+  "[ ] 3. PROPER NOUNS — capitalize all names (people, teams, cities, countries, books, films, months, historical events)\n" +
+  "[ ] 4. MISSING PERIOD — add a period at the end of every complete sentence that lacks one\n" +
+  "[ ] 5. COMMAS IN RUN-ONS — when multiple independent clauses are chained with 'we... we... we...' or similar, add a comma between each\n" +
+  "[ ] 6. COMMA AFTER INTRO — add a comma after every introductory word, phrase, or clause before the main clause\n" +
+  "[ ] 7. COMMA BEFORE CONJUNCTION — add a comma before and/but/or/so/yet when joining two independent clauses\n" +
+  "[ ] 8. COMMA IN LISTS — add commas between every item in a list of three or more\n" +
+  "[ ] 9. DOUBLE PUNCTUATION — remove duplicate periods or misplaced punctuation (e.g. '.\".') \n\n" +
+  "RULES: Never remove, reorder, or paraphrase any words. Only add/fix punctuation and capitalization.\n" +
   "Return ONLY the corrected text.\n\n" +
   "EXAMPLES:\n" +
   "when fc barcelona beat real madrid last tuesday guardiola said the result was perfect and the players deserved it\n" +
@@ -21,7 +26,9 @@ const SYSTEM =
   "there are only two options regarding commitment to a core covenant you're either in or you're out there's no such thing as life in between\n" +
   "→ There are only two options regarding commitment to a core covenant: you're either in or you're out. There's no such thing as life in between.\n\n" +
   "pep guardiola managed fc barcelona from 2008 to 2012 and won the champions league twice the la liga title three times and the copa del rey twice\n" +
-  "→ Pep Guardiola managed FC Barcelona from 2008 to 2012 and won the Champions League twice, the La Liga title three times, and the Copa del Rey twice.";
+  "→ Pep Guardiola managed FC Barcelona from 2008 to 2012 and won the Champions League twice, the La Liga title three times, and the Copa del Rey twice.\n\n" +
+  "sometimes when adversity strikes we rail against fate we brutally punish ourselves or we lash out at others we blame others or we play the victim: \"that's the way it goes there's nothing i could do it was meant to be.\".'\n" +
+  "→ Sometimes when adversity strikes, we rail against fate, we brutally punish ourselves, or we lash out at others. We blame others, or we play the victim: \"That's the way it goes, there's nothing I could do, it was meant to be.\"";
 
 export async function POST(req: NextRequest) {
   const apiKey = process.env.GEMINI_API_KEY;
@@ -47,7 +54,7 @@ export async function POST(req: NextRequest) {
         systemInstruction: { parts: [{ text: SYSTEM }] },
         contents: [{ role: "user", parts: [{ text: raw }] }],
         generationConfig: {
-          temperature: 0.4,
+          temperature: 0.6,
           maxOutputTokens: 2048,
         },
       }),
