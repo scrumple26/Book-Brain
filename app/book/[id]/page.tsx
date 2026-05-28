@@ -503,7 +503,7 @@ export default function BookPage() {
     setEditingChapterId(null);
   }
 
-  async function polishWithGemini(raw: string): Promise<string> {
+  async function polishWithGemini(raw: string): Promise<{ text: string; error?: string }> {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 45000);
     try {
@@ -513,12 +513,15 @@ export default function BookPage() {
         body: JSON.stringify({ text: raw }),
         signal: controller.signal,
       });
-      if (!res.ok) return raw;
+      if (!res.ok) {
+        const errText = await res.text().catch(() => "");
+        return { text: raw, error: `HTTP ${res.status}: ${errText}` };
+      }
       const data = await res.json();
       const result = typeof data?.text === "string" && data.text.trim() ? data.text.trim() : raw;
-      return result;
-    } catch {
-      return raw;
+      return { text: result };
+    } catch (e) {
+      return { text: raw, error: e instanceof Error ? e.message : String(e) };
     } finally {
       clearTimeout(timer);
     }
@@ -538,7 +541,9 @@ export default function BookPage() {
           setReformatProgress(`${done + 1} / ${total}`);
           let text = note.text.trim();
           if (text) {
-            text = await polishWithGemini(text);
+            const r = await polishWithGemini(text);
+            if (r.error) console.error("polish-note error:", r.error);
+            text = r.text;
             if (!/[.!?]$/.test(text)) text += ".";
           }
           newNotes.push({ ...note, text });
@@ -560,12 +565,17 @@ export default function BookPage() {
     setReformattingChapter(true);
     const total = chapter.notes.length;
     const newNotes: typeof chapter.notes = [];
+    let changed = 0;
+    const errors: string[] = [];
     for (let i = 0; i < chapter.notes.length; i++) {
       setReformatChapterProgress(`${i + 1} / ${total}`);
       const note = chapter.notes[i];
       let text = note.text.trim();
       if (text) {
-        text = await polishWithGemini(text);
+        const r = await polishWithGemini(text);
+        if (r.error) errors.push(r.error);
+        if (r.text !== text) changed++;
+        text = r.text;
         if (!/[.!?]$/.test(text)) text += ".";
       }
       newNotes.push({ ...note, text });
@@ -575,6 +585,8 @@ export default function BookPage() {
     setBook(updated);
     setReformattingChapter(false);
     setReformatChapterProgress("");
+    if (errors.length > 0) alert(`Polish finished with ${errors.length} API error(s):\n${errors[0]}`);
+    else if (changed === 0) alert("Polish ran but Gemini made 0 changes. Check the browser console (F12) for details.");
   }
 
   async function addNote(textOverride?: string) {
@@ -593,7 +605,9 @@ export default function BookPage() {
 
     if (text.trim().split(/\s+/).length >= 4) {
       setPolishing(true);
-      text = await polishWithGemini(text);
+      const r = await polishWithGemini(text);
+      if (r.error) console.error("polish-note error:", r.error);
+      text = r.text;
       setPolishing(false);
     }
 
