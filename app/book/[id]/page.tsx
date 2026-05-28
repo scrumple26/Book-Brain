@@ -157,6 +157,7 @@ export default function BookPage() {
   const cameFromDictationRef = useRef(false);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const recognitionRef = useRef<any>(null);
+  const shouldListenRef = useRef(false);
 
   const speechSupported =
     typeof window !== "undefined" &&
@@ -164,14 +165,12 @@ export default function BookPage() {
     !!((window as any).SpeechRecognition || (window as any).webkitSpeechRecognition);
 
   // Stop any active recognition when the page unmounts
-  useEffect(() => () => recognitionRef.current?.stop?.(), []);
+  useEffect(() => () => {
+    shouldListenRef.current = false;
+    recognitionRef.current?.stop?.();
+  }, []);
 
-  function toggleDictation() {
-    if (!speechSupported) return;
-    if (listening) {
-      recognitionRef.current?.stop?.();
-      return;
-    }
+  function startRecognition(baseText: string, finalDictatedRef: { value: string }) {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
     const rec = new SR();
@@ -179,27 +178,20 @@ export default function BookPage() {
     rec.interimResults = true;
     rec.lang = "en-US";
 
-    let baseText = noteInput.trimEnd();
-    let finalDictated = "";
-
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     rec.onresult = (e: any) => {
-      // Anything pushed by the recognizer is dictation; flag the next save for polish
       cameFromDictationRef.current = true;
       let interim = "";
       for (let i = e.resultIndex; i < e.results.length; i++) {
         const transcript = e.results[i][0].transcript as string;
         if (e.results[i].isFinal) {
           const trimmed = transcript.trim();
-          // Voice commands: pause-bounded single words trigger actions.
-          // Matching requires the word to be the entire finalized utterance,
-          // so mid-sentence uses ("the next page") don't trigger.
           if (/^next[\s.,!?]*$/i.test(trimmed)) {
-            const raw = [baseText, finalDictated].filter(Boolean).join(" ").trim();
+            const raw = [baseText, finalDictatedRef.value].filter(Boolean).join(" ").trim();
             const noteText = normalizeDictation(raw);
             if (noteText) addNoteRef.current(noteText);
             baseText = "";
-            finalDictated = "";
+            finalDictatedRef.value = "";
             setNoteInput("");
             continue;
           }
@@ -211,19 +203,42 @@ export default function BookPage() {
             setNoteIndent((i) => Math.max(0, i - 1));
             continue;
           }
-          finalDictated += (finalDictated ? " " : "") + trimmed;
+          finalDictatedRef.value += (finalDictatedRef.value ? " " : "") + trimmed;
         } else {
           interim += transcript;
         }
       }
-      const combined = [baseText, finalDictated, interim.trim()].filter(Boolean).join(" ");
+      const combined = [baseText, finalDictatedRef.value, interim.trim()].filter(Boolean).join(" ");
       setNoteInput(normalizeDictation(combined));
     };
-    rec.onerror = () => setListening(false);
-    rec.onend = () => setListening(false);
+    rec.onerror = () => {
+      if (!shouldListenRef.current) return;
+      // Restart after transient errors (e.g. no-speech timeout on desktop Chrome)
+      try { startRecognition(baseText, finalDictatedRef); } catch { setListening(false); shouldListenRef.current = false; }
+    };
+    rec.onend = () => {
+      // Chrome stops continuous recognition after a pause on desktop; restart if still active
+      if (shouldListenRef.current) {
+        try { startRecognition(baseText, finalDictatedRef); return; } catch { /* fall through */ }
+      }
+      setListening(false);
+    };
 
     rec.start();
     recognitionRef.current = rec;
+  }
+
+  function toggleDictation() {
+    if (!speechSupported) return;
+    if (listening) {
+      shouldListenRef.current = false;
+      recognitionRef.current?.stop?.();
+      return;
+    }
+    noteInputRef.current?.focus();
+    shouldListenRef.current = true;
+    const finalDictatedRef = { value: "" };
+    startRecognition(noteInput.trimEnd(), finalDictatedRef);
     setListening(true);
   }
 
