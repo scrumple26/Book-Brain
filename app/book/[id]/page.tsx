@@ -559,7 +559,7 @@ export default function BookPage() {
     if (!chapter) return;
     setReformattingChapter(true);
     const total = chapter.notes.length;
-    const newNotes = [];
+    const newNotes: typeof chapter.notes = [];
     for (let i = 0; i < chapter.notes.length; i++) {
       setReformatChapterProgress(`${i + 1} / ${total}`);
       const note = chapter.notes[i];
