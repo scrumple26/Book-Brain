@@ -4,7 +4,7 @@ export const runtime = "edge";
 
 const MODEL = "gemini-2.5-flash";
 const PROMPT_PREFIX =
-  "Fix the grammar, punctuation, and capitalization of this voice-dictated note. Preserve the original meaning and keep changes minimal — correct errors but do not rewrite or expand the content. Output only the corrected text, with no quotes, no labels, no explanation.\n\nNote:\n";
+  "Clean up this voice-dictated note. Add missing commas, periods, and other punctuation based on natural sentence structure. Fix capitalization and grammar errors. Do not rewrite, expand, or change the meaning. Output only the corrected text, with no quotes, no labels, no explanation.\n\nNote:\n";
 
 export async function POST(req: NextRequest) {
   const apiKey = process.env.GEMINI_API_KEY;
