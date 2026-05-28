@@ -340,7 +340,8 @@ export default function BookPage() {
       });
       if (!res.ok) return raw;
       const data = await res.json();
-      return typeof data?.text === "string" && data.text.trim() ? data.text.trim() : raw;
+      const result = typeof data?.text === "string" && data.text.trim() ? data.text.trim() : raw;
+      return /[.!?]$/.test(result) ? result : result + ".";
     } catch {
       return raw;
     }
