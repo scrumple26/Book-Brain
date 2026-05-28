@@ -4,7 +4,7 @@ export const runtime = "edge";
 
 const MODEL = "gemini-2.5-flash";
 const PROMPT_PREFIX =
-  "Clean up this voice-dictated note. Add missing commas, periods, and other punctuation. Fix capitalization and grammar errors. Keep every word — do not remove, omit, or summarize any content. Output only the corrected text, with no quotes, no labels, no explanation.\n\nNote:\n";
+  "Clean up this voice-dictated note. Be aggressive about adding commas: after introductory phrases, before coordinating conjunctions (and, but, or, so, yet), between list items, after transitional words (however, therefore, finally, also, etc.), and wherever a natural spoken pause would occur. Also add periods and other missing punctuation. Fix capitalization and grammar errors. Keep every word — do not remove, omit, or summarize any content. Output only the corrected text, with no quotes, no labels, no explanation.\n\nNote:\n";
 
 export async function POST(req: NextRequest) {
   const apiKey = process.env.GEMINI_API_KEY;
