@@ -195,6 +195,7 @@ export default function BookPage() {
   const [reformatProgress, setReformatProgress] = useState("");
   const [reformattingChapter, setReformattingChapter] = useState(false);
   const [reformatChapterProgress, setReformatChapterProgress] = useState("");
+  const [polishError, setPolishError] = useState<string | null>(null);
   const [awaitingChapterName, setAwaitingChapterName] = useState(false);
   const [dragNoteId, setDragNoteId] = useState<string | null>(null);
   const dragNoteIdRef = useRef<string | null>(null);
@@ -587,8 +588,8 @@ export default function BookPage() {
     setBook(updated);
     setReformattingChapter(false);
     setReformatChapterProgress("");
-    if (errors.length > 0) alert(`Polish finished with ${errors.length} API error(s):\n${errors[0]}`);
-    else if (changed === 0) alert("Polish ran but Gemini made 0 changes. Check the browser console (F12) for details.");
+    if (errors.length > 0) setPolishError(`Polish finished with ${errors.length} API error(s): ${errors[0]}`);
+    else if (changed === 0) setPolishError("Polish ran but Gemini made 0 changes. Check the browser console (F12) for details.");
   }
 
   async function addNote(textOverride?: string) {
@@ -992,6 +993,15 @@ export default function BookPage() {
                 </h2>
                 <p className="text-ink-300 text-xs mt-0.5">{activeChapter.notes.length} note{activeChapter.notes.length !== 1 ? "s" : ""}</p>
               </div>
+
+              {/* Polish error banner */}
+              {polishError && (
+                <div className="mx-8 mt-4 bg-red-50 border border-red-200 rounded-lg p-3 flex items-start gap-2">
+                  <span className="text-red-500 text-xs mt-0.5 flex-shrink-0">⚠</span>
+                  <p className="text-red-700 text-xs flex-1 select-all break-all font-mono">{polishError}</p>
+                  <button onClick={() => setPolishError(null)} className="text-red-400 hover:text-red-600 text-sm flex-shrink-0 leading-none">×</button>
+                </div>
+              )}
 
               {/* Notes list */}
               <div className="flex-1 overflow-y-auto px-8 py-5">
