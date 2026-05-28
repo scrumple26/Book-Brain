@@ -982,15 +982,18 @@ export default function BookPage() {
                         key={note.id}
                         className={`group relative flex items-start gap-2${cols > 1 ? " break-inside-avoid mb-1" : ""}${isDragTarget ? " border-t-2 border-amber-400" : " border-t-2 border-transparent"}`}
                         style={{ paddingLeft: INDENT_PX[level] }}
-                        draggable={editingNoteId !== note.id}
-                        onDragStart={(e) => { dragNoteIdRef.current = note.id; setDragNoteId(note.id); e.dataTransfer.effectAllowed = "move"; }}
                         onDragEnter={(e) => { e.preventDefault(); }}
                         onDragOver={(e) => { e.preventDefault(); if (dragNoteIdRef.current && dragNoteIdRef.current !== note.id) setDragOverNoteId(note.id); }}
                         onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node)) setDragOverNoteId(null); }}
                         onDrop={(e) => { e.preventDefault(); const from = dragNoteIdRef.current; if (from && from !== note.id) reorderNote(activeChapter.id, from, note.id); dragNoteIdRef.current = null; setDragNoteId(null); setDragOverNoteId(null); }}
-                        onDragEnd={() => { dragNoteIdRef.current = null; setDragNoteId(null); setDragOverNoteId(null); }}
                       >
-                        <span className="opacity-0 group-hover:opacity-100 cursor-grab active:cursor-grabbing mt-1 flex-shrink-0 text-ink-200 hover:text-ink-400 select-none text-xs leading-none" title="Drag to reorder">⠿</span>
+                        <span
+                          draggable={editingNoteId !== note.id}
+                          onDragStart={(e) => { dragNoteIdRef.current = note.id; setDragNoteId(note.id); e.dataTransfer.effectAllowed = "move"; const li = e.currentTarget.closest("li"); if (li) e.dataTransfer.setDragImage(li, 20, 10); }}
+                          onDragEnd={() => { dragNoteIdRef.current = null; setDragNoteId(null); setDragOverNoteId(null); }}
+                          className="opacity-0 group-hover:opacity-100 cursor-grab active:cursor-grabbing mt-1 flex-shrink-0 text-ink-200 hover:text-ink-400 select-none text-xs leading-none"
+                          title="Drag to reorder"
+                        >⠿</span>
                         <span className={`mt-0.5 flex-shrink-0 text-sm leading-tight select-none min-w-[1.25rem] text-right ${BULLET_COLOR[level]}`}>
                           {marker}
                         </span>
