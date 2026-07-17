@@ -4,7 +4,7 @@ export const dynamic = "force-dynamic";
 
 import { useState, useEffect, useRef } from "react";
 import { useRouter, useParams } from "next/navigation";
-import { Book, Chapter, Note } from "@/lib/types";
+import { Book, Chapter, Note, QuizCard } from "@/lib/types";
 import { generateId } from "@/lib/storage";
 import { useAuth } from "@/context/AuthContext";
 import { useBooks } from "@/context/BooksContext";
@@ -206,17 +206,12 @@ export default function BookPage() {
   const [editingNoteBold, setEditingNoteBold] = useState(false);
   const [showDeleted, setShowDeleted] = useState(false);
   const [quizOpen, setQuizOpen] = useState(false);
-  const [quizLoading, setQuizLoading] = useState(false);
-  const [quizQuestions, setQuizQuestions] = useState<{ question: string; answer: string }[]>([]);
   const [quizIdx, setQuizIdx] = useState(0);
   const [showAnswer, setShowAnswer] = useState(false);
+  const [quizMode, setQuizMode] = useState<"review" | "manage">("review");
+  const [newQuizQ, setNewQuizQ] = useState("");
+  const [newQuizA, setNewQuizA] = useState("");
   const [listening, setListening] = useState(false);
-  const [polishing, setPolishing] = useState(false);
-  const [reformatting, setReformatting] = useState(false);
-  const [reformatProgress, setReformatProgress] = useState("");
-  const [reformattingChapter, setReformattingChapter] = useState(false);
-  const [reformatChapterProgress, setReformatChapterProgress] = useState("");
-  const [polishError, setPolishError] = useState<string | null>(null);
   const [awaitingChapterName, setAwaitingChapterName] = useState(false);
   const [dragNoteId, setDragNoteId] = useState<string | null>(null);
   const dragNoteIdRef = useRef<string | null>(null);
@@ -674,31 +669,28 @@ export default function BookPage() {
     });
   }
 
-  async function openQuiz() {
+  function openQuiz() {
     if (!book) return;
-    setQuizOpen(true);
-    setQuizLoading(true);
-    const allNotes = book.chapters
-      .filter((c) => !c.deleted)
-      .flatMap((c) => c.notes.map((n) => n.text));
-    try {
-      const res = await fetch("/api/quiz", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ notes: allNotes }),
-      });
-      if (res.ok) {
-        const data = await res.json();
-        setQuizQuestions(Array.isArray(data.questions) ? data.questions : []);
-      } else {
-        setQuizQuestions([]);
-      }
-    } catch {
-      setQuizQuestions([]);
-    }
     setQuizIdx(0);
     setShowAnswer(false);
-    setQuizLoading(false);
+    setQuizMode((book.quizCards?.length ?? 0) > 0 ? "review" : "manage");
+    setQuizOpen(true);
+  }
+
+  function addQuizCard() {
+    if (!book) return;
+    const question = newQuizQ.trim();
+    const answer = newQuizA.trim();
+    if (!question || !answer) return;
+    const card: QuizCard = { id: generateId(), question, answer };
+    persist({ ...book, quizCards: [...(book.quizCards ?? []), card] });
+    setNewQuizQ("");
+    setNewQuizA("");
+  }
+
+  function deleteQuizCard(cardId: string) {
+    if (!book) return;
+    persist({ ...book, quizCards: (book.quizCards ?? []).filter((c) => c.id !== cardId) });
   }
 
   function saveChapterName(chapterId: string) {
@@ -715,92 +707,6 @@ export default function BookPage() {
     setEditingChapterId(null);
   }
 
-  async function polishWithGemini(raw: string): Promise<{ text: string; error?: string }> {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 45000);
-    try {
-      const res = await fetch("/api/polish-note", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text: raw }),
-        signal: controller.signal,
-      });
-      if (!res.ok) {
-        const errText = await res.text().catch(() => "");
-        return { text: raw, error: `HTTP ${res.status}: ${errText}` };
-      }
-      const data = await res.json();
-      const result = typeof data?.text === "string" && data.text.trim() ? data.text.trim() : raw;
-      return { text: result };
-    } catch (e) {
-      return { text: raw, error: e instanceof Error ? e.message : String(e) };
-    } finally {
-      clearTimeout(timer);
-    }
-  }
-
-  async function reformatAllNotes() {
-    if (!book || reformatting) return;
-    setReformatting(true);
-    const chapters = book.chapters;
-    let total = chapters.reduce((s, c) => s + c.notes.length, 0);
-    let done = 0;
-    const updated = { ...book, chapters: await Promise.resolve(chapters).then(async (chs) => {
-      const result = [];
-      for (const chapter of chs) {
-        const newNotes = [];
-        for (const note of chapter.notes) {
-          setReformatProgress(`${done + 1} / ${total}`);
-          let text = note.text.trim();
-          if (text) {
-            const r = await polishWithGemini(text);
-            if (r.error) console.error("polish-note error:", r.error);
-            text = r.text;
-            if (!/[.!?]$/.test(text)) text += ".";
-          }
-          newNotes.push({ ...note, text });
-          done++;
-        }
-        result.push({ ...chapter, notes: newNotes });
-      }
-      return result;
-    }) };
-    await upsertBook(updated);
-    setReformatting(false);
-    setReformatProgress("");
-  }
-
-  async function reformatCurrentChapter() {
-    if (!book || !activeChapterId || reformattingChapter) return;
-    const chapter = book.chapters.find((c) => c.id === activeChapterId);
-    if (!chapter) return;
-    setReformattingChapter(true);
-    const total = chapter.notes.length;
-    const newNotes: typeof chapter.notes = [];
-    let changed = 0;
-    const errors: string[] = [];
-    for (let i = 0; i < chapter.notes.length; i++) {
-      setReformatChapterProgress(`${i + 1} / ${total}`);
-      const note = chapter.notes[i];
-      let text = note.text.trim();
-      if (text) {
-        const r = await polishWithGemini(text);
-        if (r.error) errors.push(r.error);
-        if (r.text !== text) changed++;
-        text = r.text;
-        if (!/[.!?]$/.test(text)) text += ".";
-      }
-      newNotes.push({ ...note, text });
-    }
-    const updated = { ...book, chapters: book.chapters.map((c) => c.id === activeChapterId ? { ...c, notes: newNotes } : c) };
-    await upsertBook(updated);
-    setBook(updated);
-    setReformattingChapter(false);
-    setReformatChapterProgress("");
-    if (errors.length > 0) setPolishError(`Polish finished with ${errors.length} API error(s): ${errors[0]}`);
-    else if (changed === 0) setPolishError("Polish ran but Gemini made 0 changes. Check the browser console (F12) for details.");
-  }
-
   async function addNote(textOverride?: string) {
     if (!book || !activeChapterId) return;
     const targetChapterId = activeChapterId;
@@ -814,14 +720,6 @@ export default function BookPage() {
     // Strip any stray "new/next bullet" voice commands
     text = text.replace(/\b(?:new|next)\s+bullet\b[\s.,!?]*/gi, "").trim();
     if (!text) return;
-
-    if (text.trim().split(/\s+/).length >= 4) {
-      setPolishing(true);
-      const r = await polishWithGemini(text);
-      if (r.error) console.error("polish-note error:", r.error);
-      text = r.text;
-      setPolishing(false);
-    }
 
     // Always end with sentence-closing punctuation, typed or dictated
     if (!/[.!?]$/.test(text)) text += ".";
@@ -993,22 +891,6 @@ export default function BookPage() {
               />
               <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-ink-300 text-xs">🔍</span>
             </div>
-            <button
-              onClick={reformatCurrentChapter}
-              disabled={reformattingChapter || reformatting}
-              className="flex items-center gap-1.5 border border-parchment-300 text-ink-500 hover:border-amber-500 hover:text-amber-600 text-xs font-medium px-3 py-2 rounded-lg transition-colors disabled:opacity-50"
-              title="Polish every note in this chapter"
-            >
-              {reformattingChapter ? `Polishing ${reformatChapterProgress}…` : "✨ Polish chapter"}
-            </button>
-            <button
-              onClick={reformatAllNotes}
-              disabled={reformatting || reformattingChapter}
-              className="flex items-center gap-1.5 border border-parchment-300 text-ink-500 hover:border-amber-500 hover:text-amber-600 text-xs font-medium px-3 py-2 rounded-lg transition-colors disabled:opacity-50"
-              title="Re-polish every note through Gemini"
-            >
-              {reformatting ? `Reformatting ${reformatProgress}…` : "⟳ Reformat all"}
-            </button>
             <button
               onClick={() => exportMarkdown(book)}
               className="flex items-center gap-1.5 border border-parchment-300 text-ink-500 hover:border-amber-500 hover:text-amber-600 text-xs font-medium px-3 py-2 rounded-lg transition-colors"
@@ -1202,15 +1084,6 @@ export default function BookPage() {
                 </h2>
                 <p className="text-ink-300 text-xs mt-0.5">{activeChapter.notes.length} note{activeChapter.notes.length !== 1 ? "s" : ""}</p>
               </div>
-
-              {/* Polish error banner */}
-              {polishError && (
-                <div className="mx-8 mt-4 bg-red-50 border border-red-200 rounded-lg p-3 flex items-start gap-2">
-                  <span className="text-red-500 text-xs mt-0.5 flex-shrink-0">⚠</span>
-                  <p className="text-red-700 text-xs flex-1 select-all break-all font-mono">{polishError}</p>
-                  <button onClick={() => setPolishError(null)} className="text-red-400 hover:text-red-600 text-sm flex-shrink-0 leading-none">×</button>
-                </div>
-              )}
 
               {/* Notes list */}
               <div className="flex-1 overflow-y-auto px-8 py-5">
@@ -1454,9 +1327,6 @@ export default function BookPage() {
                 <p className="text-xs text-ink-300 mt-1.5 ml-20">
                   Tab = indent · Shift+Tab = outdent · Enter = add
                   {speechSupported && ` · 🎤 = dictate · ${awaitingChapterName ? "now say chapter name…" : "\"new/next bullet\" · \"new chapter\" · \"indent\" / \"outdent\""}`}
-                  {polishing && (
-                    <span className="ml-2 text-amber-600 font-medium">✨ polishing…</span>
-                  )}
                 </p>
               </div>
             </div>
@@ -1464,54 +1334,98 @@ export default function BookPage() {
         </main>
       </div>
 
-      {/* Quiz modal */}
-      {quizOpen && (
-        <div className="fixed inset-0 bg-ink-900/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-2xl shadow-xl w-full max-w-lg p-6 flex flex-col gap-4">
-            <div className="flex items-center justify-between">
-              <span className="text-xs font-medium text-ink-300 uppercase tracking-wide">
-                {quizLoading ? "Generating quiz…" : quizQuestions.length > 0 ? `Question ${quizIdx + 1} of ${quizQuestions.length}` : "Quiz"}
-              </span>
-              <button onClick={() => setQuizOpen(false)} className="text-ink-300 hover:text-ink-700 text-lg leading-none">×</button>
-            </div>
-            {quizLoading ? (
-              <div className="text-center py-8">
-                <p className="text-ink-400 text-sm animate-pulse">✨ Generating questions…</p>
+      {/* Quiz modal — manual flashcards */}
+      {quizOpen && book && (() => {
+        const cards = book.quizCards ?? [];
+        const card = cards[quizIdx];
+        return (
+          <div className="fixed inset-0 bg-ink-900/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+            <div className="bg-white rounded-2xl shadow-xl w-full max-w-lg p-6 flex flex-col gap-4 max-h-[90vh] overflow-y-auto">
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center gap-1 bg-parchment-100 rounded-lg p-0.5">
+                  <button
+                    onClick={() => { setQuizMode("review"); setQuizIdx(0); setShowAnswer(false); }}
+                    className={`text-xs font-medium px-3 py-1 rounded-md transition-colors ${quizMode === "review" ? "bg-white text-ink-900 shadow-sm" : "text-ink-400 hover:text-ink-700"}`}
+                  >🎓 Review</button>
+                  <button
+                    onClick={() => setQuizMode("manage")}
+                    className={`text-xs font-medium px-3 py-1 rounded-md transition-colors ${quizMode === "manage" ? "bg-white text-ink-900 shadow-sm" : "text-ink-400 hover:text-ink-700"}`}
+                  >✎ Cards ({cards.length})</button>
+                </div>
+                <button onClick={() => setQuizOpen(false)} className="text-ink-300 hover:text-ink-700 text-lg leading-none">×</button>
               </div>
-            ) : quizQuestions.length === 0 ? (
-              <p className="text-ink-400 text-sm italic text-center py-8">Could not generate quiz. Make sure this book has notes.</p>
-            ) : (
-              <>
-                <p className="font-serif text-ink-900 text-lg leading-snug">{quizQuestions[quizIdx].question}</p>
-                {showAnswer ? (
-                  <div className="bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 text-sm text-ink-800">
-                    {quizQuestions[quizIdx].answer}
+
+              {quizMode === "review" ? (
+                cards.length === 0 ? (
+                  <div className="text-center py-8">
+                    <p className="text-ink-400 text-sm italic mb-3">No quiz cards yet.</p>
+                    <button onClick={() => setQuizMode("manage")} className="bg-amber-600 hover:bg-amber-500 text-white text-sm font-medium px-4 py-2 rounded-lg transition-colors">Add cards</button>
                   </div>
                 ) : (
-                  <button
-                    onClick={() => setShowAnswer(true)}
-                    className="bg-amber-600 hover:bg-amber-500 text-white text-sm font-medium px-4 py-2.5 rounded-lg transition-colors"
-                  >
-                    Reveal Answer
-                  </button>
-                )}
-                <div className="flex gap-2 mt-2">
-                  <button
-                    onClick={() => { setQuizIdx((i) => Math.max(0, i - 1)); setShowAnswer(false); }}
-                    disabled={quizIdx === 0}
-                    className="flex-1 border border-parchment-300 text-ink-500 text-sm font-medium py-2 rounded-lg hover:bg-parchment-100 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-                  >← Prev</button>
-                  <button
-                    onClick={() => { setQuizIdx((i) => Math.min(quizQuestions.length - 1, i + 1)); setShowAnswer(false); }}
-                    disabled={quizIdx === quizQuestions.length - 1}
-                    className="flex-1 border border-parchment-300 text-ink-500 text-sm font-medium py-2 rounded-lg hover:bg-parchment-100 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-                  >Next →</button>
-                </div>
-              </>
-            )}
+                  <>
+                    <span className="text-xs font-medium text-ink-300 uppercase tracking-wide">Card {quizIdx + 1} of {cards.length}</span>
+                    <p className="font-serif text-ink-900 text-lg leading-snug">{card.question}</p>
+                    {showAnswer ? (
+                      <div className="bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 text-sm text-ink-800 whitespace-pre-wrap">{card.answer}</div>
+                    ) : (
+                      <button onClick={() => setShowAnswer(true)} className="bg-amber-600 hover:bg-amber-500 text-white text-sm font-medium px-4 py-2.5 rounded-lg transition-colors">Reveal Answer</button>
+                    )}
+                    <div className="flex gap-2 mt-2">
+                      <button
+                        onClick={() => { setQuizIdx((i) => Math.max(0, i - 1)); setShowAnswer(false); }}
+                        disabled={quizIdx === 0}
+                        className="flex-1 border border-parchment-300 text-ink-500 text-sm font-medium py-2 rounded-lg hover:bg-parchment-100 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                      >← Prev</button>
+                      <button
+                        onClick={() => { setQuizIdx((i) => Math.min(cards.length - 1, i + 1)); setShowAnswer(false); }}
+                        disabled={quizIdx === cards.length - 1}
+                        className="flex-1 border border-parchment-300 text-ink-500 text-sm font-medium py-2 rounded-lg hover:bg-parchment-100 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                      >Next →</button>
+                    </div>
+                  </>
+                )
+              ) : (
+                <>
+                  <div className="space-y-2">
+                    <input
+                      value={newQuizQ}
+                      onChange={(e) => setNewQuizQ(e.target.value)}
+                      placeholder="Question"
+                      className="w-full border border-parchment-300 rounded-lg px-3 py-2 text-sm text-ink-900 placeholder-ink-300 focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-transparent"
+                    />
+                    <textarea
+                      value={newQuizA}
+                      onChange={(e) => setNewQuizA(e.target.value)}
+                      onKeyDown={(e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) addQuizCard(); }}
+                      placeholder="Answer (Ctrl/⌘+Enter to add)"
+                      rows={2}
+                      className="w-full border border-parchment-300 rounded-lg px-3 py-2 text-sm text-ink-900 placeholder-ink-300 focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-transparent resize-y"
+                    />
+                    <button
+                      onClick={addQuizCard}
+                      disabled={!newQuizQ.trim() || !newQuizA.trim()}
+                      className="w-full bg-amber-600 hover:bg-amber-500 disabled:opacity-40 disabled:cursor-not-allowed text-white text-sm font-medium py-2 rounded-lg transition-colors"
+                    >+ Add card</button>
+                  </div>
+                  {cards.length > 0 && (
+                    <ul className="space-y-1.5 border-t border-parchment-100 pt-3">
+                      {cards.map((c) => (
+                        <li key={c.id} className="flex items-start justify-between gap-2 text-sm group">
+                          <div className="min-w-0">
+                            <p className="text-ink-800 font-medium truncate">{c.question}</p>
+                            <p className="text-ink-400 text-xs truncate">{c.answer}</p>
+                          </div>
+                          <button onClick={() => deleteQuizCard(c.id)} className="opacity-0 group-hover:opacity-100 text-ink-300 hover:text-red-500 transition-all flex-shrink-0 leading-none">×</button>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </>
+              )}
+            </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
     </div>
   );
 }

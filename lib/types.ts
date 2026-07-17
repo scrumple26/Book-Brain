@@ -20,6 +20,12 @@ export interface ReadingEntry {
   pages: number;
 }
 
+export interface QuizCard {
+  id: string;
+  question: string;
+  answer: string;
+}
+
 export interface Book {
   id: string;
   title: string;
@@ -29,4 +35,5 @@ export interface Book {
   createdAt: string;
   chapters: Chapter[];
   readingLog?: ReadingEntry[];
+  quizCards?: QuizCard[];
 }
