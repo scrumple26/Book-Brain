@@ -1182,7 +1182,7 @@ export default function BookPage() {
                               className="text-ink-300 hover:text-amber-600 text-xs px-1 py-0.5 rounded hover:bg-parchment-200"
                               title={isNumbered ? "Convert to bullet" : "Convert to numbered"}
                             >{isNumbered ? "•" : "1."}</button>
-                            <button onClick={() => { setEditingNoteId(note.id); setEditingNoteText(note.text); setEditingNoteIndent(level); setEditingNoteType(note.type ?? "bullet"); setEditingNoteBold(note.bold ?? false); }}
+                            <button onClick={() => { if (listening) stopDictation(); setEditingNoteId(note.id); setEditingNoteText(note.text); setEditingNoteIndent(level); setEditingNoteType(note.type ?? "bullet"); setEditingNoteBold(note.bold ?? false); }}
                               className="text-ink-300 hover:text-ink-700 text-xs p-0.5">✎</button>
                             <button onClick={() => deleteNote(activeChapter.id, note.id)}
                               className="text-ink-300 hover:text-red-500 text-sm p-0.5 leading-none">×</button>
@@ -1257,11 +1257,12 @@ export default function BookPage() {
                         setNoteInput(e.target.value);
                         e.target.style.height = "auto";
                         e.target.style.height = e.target.scrollHeight + "px";
+                        cameFromDictationRef.current = false;
                         if (listening) {
-                          // Tell the next onresult to reset accumulated speech to this value
+                          // Manual typing takes over — turn the mic off.
+                          // Preserve what was typed if a final result races the stop.
                           manualEditRef.current = e.target.value;
-                        } else {
-                          cameFromDictationRef.current = false;
+                          stopDictation();
                         }
                       }}
                       onKeyDown={(e) => {
