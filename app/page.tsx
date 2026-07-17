@@ -108,8 +108,7 @@ export default function Library() {
   // Feature 6: Random notes — computed once after books first load
   const [randomNotes, setRandomNotes] = useState<{ text: string; bookTitle: string; chapterName: string; bold: boolean }[]>([]);
   const randomNotesPicked = useRef(false);
-  useEffect(() => {
-    if (randomNotesPicked.current || booksLoading || books.length === 0) return;
+  function pickRandomNotes() {
     const pool: { text: string; bookTitle: string; chapterName: string; bold: boolean }[] = [];
     for (const b of books) {
       for (const c of b.chapters.filter((ch) => !ch.deleted)) {
@@ -118,10 +117,14 @@ export default function Library() {
         }
       }
     }
-    if (pool.length === 0) return;
-    randomNotesPicked.current = true;
+    if (pool.length === 0) return false;
     const shuffled = [...pool].sort(() => Math.random() - 0.5);
     setRandomNotes(shuffled.slice(0, 5));
+    return true;
+  }
+  useEffect(() => {
+    if (randomNotesPicked.current || booksLoading || books.length === 0) return;
+    if (pickRandomNotes()) randomNotesPicked.current = true;
   }, [books, booksLoading]);
 
   function resetForm() {
@@ -293,7 +296,10 @@ export default function Library() {
             {/* Feature 6: Random notes */}
             {randomNotes.length > 0 && (
               <div className="bg-white border border-parchment-200 rounded-xl p-5">
-                <p className="text-xs font-medium text-ink-300 uppercase tracking-wide mb-3">📝 From Your Notes</p>
+                <div className="flex items-center justify-between mb-3">
+                  <p className="text-xs font-medium text-ink-300 uppercase tracking-wide">📝 From Your Notes</p>
+                  <button onClick={() => pickRandomNotes()} className="text-ink-300 hover:text-amber-600 transition-colors" title="Show different notes">↻</button>
+                </div>
                 <div className="space-y-3">
                   {randomNotes.map((n, i) => (
                     <div key={i} className="border-l-2 border-amber-300 pl-3">
