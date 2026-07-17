@@ -112,8 +112,13 @@ export default function Library() {
     const pool: { text: string; bookTitle: string; chapterName: string; bold: boolean }[] = [];
     for (const b of books) {
       for (const c of b.chapters.filter((ch) => !ch.deleted)) {
+        let mainBullet: string | null = null;
         for (const n of c.notes) {
-          pool.push({ text: n.text, bookTitle: b.title, chapterName: c.name, bold: n.bold ?? false });
+          if ((n.indent ?? 0) === 0) mainBullet = n.text;
+          const source = (n.indent ?? 0) > 0 && mainBullet !== null
+            ? (mainBullet.length > 60 ? mainBullet.slice(0, 60) + "…" : mainBullet)
+            : c.name;
+          pool.push({ text: n.text, bookTitle: b.title, chapterName: source, bold: n.bold ?? false });
         }
       }
     }
