@@ -8,6 +8,7 @@ import { Book } from "@/lib/types";
 import { generateId } from "@/lib/storage";
 import { useAuth } from "@/context/AuthContext";
 import { useBooks } from "@/context/BooksContext";
+import { parseBooks, toBook, countNotes, type ParsedBook } from "@/lib/importBook";
 
 function SignInScreen({ onSignIn, error }: { onSignIn: () => void; error: string | null }) {
   return (
@@ -98,6 +99,34 @@ export default function Library() {
   const [dateCompleted, setDateCompleted] = useState("");
   const [search, setSearch] = useState("");
   const [activeTag, setActiveTag] = useState<string | null>(null);
+
+  // Import: paste or upload a Markdown / CSV file → preview → save as books
+  const [showImport, setShowImport] = useState(false);
+  const [importText, setImportText] = useState("");
+  const [importName, setImportName] = useState<string | undefined>(undefined);
+  const [importing, setImporting] = useState(false);
+  const importFileRef = useRef<HTMLInputElement>(null);
+  const importPreview: ParsedBook[] = importText.trim() ? parseBooks(importText, importName) : [];
+
+  function resetImport() {
+    setImportText("");
+    setImportName(undefined);
+    setShowImport(false);
+    if (importFileRef.current) importFileRef.current.value = "";
+  }
+
+  async function runImport() {
+    if (!user || importPreview.length === 0 || importing) return;
+    setImporting(true);
+    try {
+      for (const parsed of importPreview) {
+        await upsertBook(toBook(parsed));
+      }
+      resetImport();
+    } finally {
+      setImporting(false);
+    }
+  }
 
   // Feature 7: Reading log
   const todayStr = new Date().toISOString().split("T")[0];
@@ -243,6 +272,13 @@ export default function Library() {
               className="text-xs text-ink-300 hover:text-ink-700 border border-parchment-300 px-3 py-1.5 rounded-lg transition-colors"
             >
               Sign out
+            </button>
+            <button
+              onClick={() => setShowImport(true)}
+              className="flex items-center gap-2 border border-parchment-300 text-ink-500 hover:border-amber-500 hover:text-amber-600 text-sm font-medium px-4 py-2 rounded-lg transition-colors"
+              title="Import notes from a Markdown or CSV file"
+            >
+              <span className="text-base leading-none">↑</span> Import
             </button>
             <button
               onClick={() => setShowForm(true)}
@@ -480,6 +516,93 @@ export default function Library() {
           </div>
         )}
       </main>
+
+      {/* Import modal */}
+      {showImport && (
+        <div
+          className="fixed inset-0 bg-ink-900/40 backdrop-blur-sm flex items-center justify-center z-50 p-4"
+          onClick={resetImport}
+        >
+          <div
+            className="bg-white rounded-2xl shadow-xl w-full max-w-lg p-6 max-h-[90vh] overflow-y-auto"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h2 className="font-serif text-xl font-semibold text-ink-900 mb-2">Import notes</h2>
+            <p className="text-xs text-ink-500 mb-4 leading-relaxed">
+              Paste a Markdown or CSV file, or choose one. Markdown: a title line (<code>{"# Title"}</code> or{" "}
+              <code>{"**Title By Author**"}</code>), chapter headers (<code>{"## Name"}</code> or{" "}
+              <code>{"**Chp 1: Name**"}</code>), and <code>*</code>/<code>-</code> bullets — indent sub-bullets with 2 spaces.
+              CSV needs <code>Book</code> and <code>Note</code> columns (optional <code>Author</code>, <code>Chapter</code>, <code>Indent</code>).
+            </p>
+
+            <div className="flex items-center gap-2 mb-3">
+              <button
+                onClick={() => importFileRef.current?.click()}
+                className="border border-parchment-300 text-ink-500 hover:border-amber-500 hover:text-amber-600 text-xs font-medium px-3 py-2 rounded-lg transition-colors"
+              >
+                Choose file (.md / .csv)
+              </button>
+              {importName && <span className="text-xs text-ink-300 truncate">{importName}</span>}
+              <input
+                ref={importFileRef}
+                type="file"
+                accept=".md,.markdown,.csv,.txt,text/markdown,text/csv,text/plain"
+                className="hidden"
+                onChange={async (e) => {
+                  const file = e.target.files?.[0];
+                  if (!file) return;
+                  setImportName(file.name);
+                  setImportText(await file.text());
+                }}
+              />
+            </div>
+
+            <textarea
+              value={importText}
+              onChange={(e) => { setImportText(e.target.value); setImportName(undefined); }}
+              rows={8}
+              placeholder={"**The Art Of Winning By Bill Belichick**\n\n**Chp 1: Big Games**\n\n* A note…\n  * A sub-note…"}
+              className="w-full border border-parchment-300 rounded-lg px-3 py-2.5 text-xs font-mono text-ink-900 placeholder-ink-300 focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-transparent resize-y"
+            />
+
+            {importText.trim() && (
+              <div className="mt-3 rounded-lg bg-parchment-50 border border-parchment-200 px-3 py-2 text-sm">
+                {importPreview.length === 0 ? (
+                  <p className="text-red-500 text-xs">
+                    Couldn&apos;t find any books. Check the title line and that notes start with <code>*</code> or <code>-</code>.
+                  </p>
+                ) : (
+                  <ul className="space-y-1">
+                    {importPreview.map((b, i) => (
+                      <li key={i} className="text-ink-700">
+                        <span className="font-medium">{b.title}</span>
+                        <span className="text-ink-400"> — {b.author || "Unknown"}</span>
+                        <span className="text-ink-300 text-xs"> · {b.chapters.length} chapter{b.chapters.length !== 1 ? "s" : ""}, {countNotes(b)} note{countNotes(b) !== 1 ? "s" : ""}</span>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            )}
+
+            <div className="flex gap-3 mt-6">
+              <button
+                onClick={resetImport}
+                className="flex-1 border border-parchment-300 text-ink-500 text-sm font-medium py-2.5 rounded-lg hover:bg-parchment-100 transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={runImport}
+                disabled={importPreview.length === 0 || importing}
+                className="flex-1 bg-amber-600 hover:bg-amber-500 disabled:opacity-40 disabled:cursor-not-allowed text-white text-sm font-medium py-2.5 rounded-lg transition-colors"
+              >
+                {importing ? "Importing…" : importPreview.length > 1 ? `Import ${importPreview.length} books` : "Import book"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Add book modal */}
       {showForm && (
