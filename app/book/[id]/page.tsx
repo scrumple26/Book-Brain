@@ -8,6 +8,13 @@ import { Book, Chapter, Note } from "@/lib/types";
 import { generateId } from "@/lib/storage";
 import { useAuth } from "@/context/AuthContext";
 import { useBooks } from "@/context/BooksContext";
+import {
+  AQUA_MAX_SECONDS_PER_MONTH,
+  AQUA_MONTHLY_CAP_USD,
+  addAquaSecondsUsed,
+  aquaSpendUsd,
+  fetchAquaSecondsUsed,
+} from "@/lib/aqua";
 
 const BULLET_CHAR = ["•", "◦", "▸"] as const;
 const BULLET_COLOR = ["text-amber-600", "text-ink-400", "text-ink-300"] as const;
@@ -160,6 +167,20 @@ function normalizeDictation(text: string): string {
   return out;
 }
 
+// One finalized dictation utterance. `clean` marks text that came back from
+// Aqua's Avalon model (already punctuated and cased) — it must NOT go through
+// normalizeDictation, whose lowercasing would destroy the model's casing.
+type DictSeg = { id: number; text: string; clean?: boolean };
+
+function segsToText(segs: DictSeg[]): string {
+  return segs
+    .map((s) => (s.clean ? s.text : normalizeDictation(s.text)))
+    .filter(Boolean)
+    .join(" ")
+    .replace(/ {2,}/g, " ")
+    .trim();
+}
+
 export default function BookPage() {
   const router = useRouter();
   const { id } = useParams<{ id: string }>();
@@ -214,6 +235,20 @@ export default function BookPage() {
   const dictationModeRef = useRef<"note" | "chapter">("note");
   const manualEditRef = useRef<string | null>(null);
 
+  // --- Aqua Avalon high-accuracy re-transcription + hard $10/month budget ---
+  const [aquaSecondsUsed, setAquaSecondsUsed] = useState<number | null>(null);
+  const [aquaCapped, setAquaCapped] = useState(false);
+  const [autoStopped, setAutoStopped] = useState(false);
+  const aquaSecondsRef = useRef(0);
+  const aquaReadyRef = useRef(false); // usage doc loaded OK → allowed to spend
+  const aquaSessionRef = useRef(false); // Aqua recording active this session
+  const sessionTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const utterRef = useRef<{ rec: MediaRecorder; chunks: BlobPart[]; startTs: number } | null>(null);
+  const pendingAvalonRef = useRef<Map<number, Promise<void>>>(new Map());
+  const nextSegIdRef = useRef(1);
+  const dictBaseRef = useRef("");
+  const dictSegsRef = useRef<{ segs: DictSeg[] } | null>(null);
+
   const speechSupported =
     typeof window !== "undefined" &&
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -232,12 +267,132 @@ export default function BookPage() {
   // Stop any active recognition and release mic when the page unmounts
   useEffect(() => () => {
     shouldListenRef.current = false;
+    if (sessionTimerRef.current) { clearTimeout(sessionTimerRef.current); sessionTimerRef.current = null; }
+    try { utterRef.current?.rec.stop(); } catch { /* already stopped */ }
+    utterRef.current = null;
     recognitionRef.current?.stop?.();
     micStreamRef.current?.getTracks().forEach((t) => t.stop());
     micStreamRef.current = null;
   }, []);
 
-  function startRecognition(baseText: string, finalDictatedRef: { value: string }) {
+  function beginUtterance(stream: MediaStream) {
+    try {
+      const mime =
+        typeof MediaRecorder !== "undefined" && MediaRecorder.isTypeSupported?.("audio/webm;codecs=opus")
+          ? "audio/webm;codecs=opus"
+          : undefined;
+      const rec = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined);
+      const chunks: BlobPart[] = [];
+      rec.ondataavailable = (e) => {
+        if (e.data.size > 0) chunks.push(e.data);
+      };
+      rec.start();
+      utterRef.current = { rec, chunks, startTs: Date.now() };
+    } catch {
+      // Recorder unavailable — session silently falls back to Web Speech only
+      aquaSessionRef.current = false;
+      utterRef.current = null;
+    }
+  }
+
+  /** Close the current utterance clip. With `forSeg`, the clip goes to Aqua and
+   *  the segment's text is swapped when the better transcript returns; without,
+   *  the clip is discarded (voice commands and chapter names don't need Aqua,
+   *  and discarded clips cost nothing). */
+  function rotateUtterance(forSeg: DictSeg | null) {
+    const u = utterRef.current;
+    if (!u) return;
+    utterRef.current = null;
+    const durationSec = (Date.now() - u.startTs) / 1000;
+    u.rec.onstop = () => {
+      if (!forSeg || durationSec < 1) return;
+      const blob = new Blob(u.chunks, { type: u.rec.mimeType || "audio/webm" });
+      if (blob.size === 0) return;
+      const p = transcribeUtterance(blob, durationSec, forSeg).finally(() => {
+        pendingAvalonRef.current.delete(forSeg.id);
+      });
+      pendingAvalonRef.current.set(forSeg.id, p);
+    };
+    try {
+      u.rec.stop();
+    } catch {
+      /* already stopped */
+    }
+    const stream = micStreamRef.current;
+    if (aquaSessionRef.current && stream && shouldListenRef.current) beginUtterance(stream);
+  }
+
+  /** Re-render the note input from the dictation refs (base text + segments). */
+  function renderDictation(interim = "") {
+    const f = dictSegsRef.current;
+    const parts = [
+      dictBaseRef.current,
+      f ? segsToText(f.segs) : "",
+      interim ? normalizeDictation(interim) : "",
+    ];
+    setNoteInput(parts.filter(Boolean).join(" "));
+  }
+
+  async function transcribeUtterance(blob: Blob, durationSec: number, seg: DictSeg) {
+    const uid = user?.uid;
+    if (!uid || !aquaReadyRef.current) return;
+    // HARD BUDGET: refuse any clip that could cross the safety threshold.
+    if (aquaSecondsRef.current + durationSec > AQUA_MAX_SECONDS_PER_MONTH) {
+      aquaSessionRef.current = false;
+      setAquaCapped(true);
+      return;
+    }
+    // Meter BEFORE sending — the cap may only ever overcount, never undercount.
+    aquaSecondsRef.current += durationSec;
+    setAquaSecondsUsed(aquaSecondsRef.current);
+    addAquaSecondsUsed(uid, durationSec).catch((e) => console.error("Aqua usage write failed:", e));
+    try {
+      const fd = new FormData();
+      fd.append("audio", blob, "utterance.webm");
+      const res = await fetch("/api/transcribe", { method: "POST", body: fd });
+      if (!res.ok) {
+        if (res.status === 501) aquaSessionRef.current = false; // AQUA_API_KEY not configured
+        return; // keep the Web Speech text
+      }
+      const data = await res.json();
+      let text = typeof data?.text === "string" ? data.text.trim() : "";
+      // Safety: spoken commands must never survive into note text
+      text = text
+        .replace(/\b(?:new|next)\s+(?:bullet|chapter)\b[\s.,!?]*/gi, " ")
+        .replace(/ {2,}/g, " ")
+        .trim();
+      if (!text) return;
+      const f = dictSegsRef.current;
+      const target = f?.segs.find((s) => s.id === seg.id);
+      if (target) {
+        target.text = text;
+        target.clean = true;
+        renderDictation();
+      }
+    } catch {
+      // network hiccup — the Web Speech text stands
+    }
+  }
+
+  /** Wait briefly for in-flight Aqua transcripts, then add the note. */
+  function flushNoteFromSegs(base: string, segs: DictSeg[]) {
+    const pending = segs
+      .map((s) => pendingAvalonRef.current.get(s.id))
+      .filter((p): p is Promise<void> => Boolean(p));
+    const finish = () => {
+      const raw = [base, segsToText(segs)].filter(Boolean).join(" ").trim();
+      if (raw) addNoteRef.current(raw);
+    };
+    if (pending.length === 0) {
+      finish();
+      return;
+    }
+    Promise.race([Promise.allSettled(pending), new Promise((r) => setTimeout(r, 3000))]).then(finish);
+  }
+
+  function startRecognition(baseText: string, finalDictatedRef: { segs: DictSeg[] }) {
+    dictBaseRef.current = baseText;
+    dictSegsRef.current = finalDictatedRef;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
     const rec = new SR();
@@ -252,7 +407,8 @@ export default function BookPage() {
       let hadManualEdit = false;
       if (manualEditRef.current !== null) {
         baseText = manualEditRef.current.trimEnd();
-        finalDictatedRef.value = "";
+        dictBaseRef.current = baseText;
+        finalDictatedRef.segs = [];
         manualEditRef.current = null;
         hadManualEdit = true;
       }
@@ -265,6 +421,7 @@ export default function BookPage() {
 
           // Chapter-name capture mode: next utterance becomes the new chapter
           if (dictationModeRef.current === "chapter") {
+            rotateUtterance(null); // chapter names don't need Aqua
             // Parse optional leading number: "3 The Great War" or "Chapter 3 The Great War"
             const numMatch = trimmed.match(/^(?:chapter\s+)?(\d+)\s+(.+)/i);
             const chapterNumber = numMatch ? numMatch[1] : "";
@@ -278,7 +435,8 @@ export default function BookPage() {
             dictationModeRef.current = "note";
             setAwaitingChapterName(false);
             baseText = "";
-            finalDictatedRef.value = "";
+            dictBaseRef.current = "";
+            finalDictatedRef.segs = [];
             setNoteInput("");
             continue;
           }
@@ -286,16 +444,19 @@ export default function BookPage() {
           // "new chapter" command — save any pending note then enter chapter-name mode
           const chapterCmd = trimmed.match(/^(.*?)\s*\bnew\s+chapter[\s.,!?]*$/i);
           if (chapterCmd) {
+            rotateUtterance(null); // clip contains the command words — discard it
             const chunk = chapterCmd[1].trim();
             // Discard pre-command audio if the user just backspaced — it predates the edit
-            if (chunk && !hadManualEdit) finalDictatedRef.value += (finalDictatedRef.value ? " " : "") + chunk;
-            const raw = [baseText, finalDictatedRef.value].filter(Boolean).join(" ").trim();
-            if (raw) { const nt = normalizeDictation(raw); if (nt) addNoteRef.current(nt); }
+            if (chunk && !hadManualEdit) finalDictatedRef.segs.push({ id: nextSegIdRef.current++, text: chunk });
+            const segsToFlush = finalDictatedRef.segs;
+            const baseToFlush = baseText;
             baseText = "";
-            finalDictatedRef.value = "";
+            dictBaseRef.current = "";
+            finalDictatedRef.segs = [];
             setNoteInput("");
             dictationModeRef.current = "chapter";
             setAwaitingChapterName(true);
+            flushNoteFromSegs(baseToFlush, segsToFlush);
             continue;
           }
 
@@ -303,32 +464,37 @@ export default function BookPage() {
           // so Chrome lumping words together doesn't miss the command
           const bulletCmd = trimmed.match(/^(.*?)\s*\b(?:new|next)\s+bullet[\s.,!?]*$/i);
           if (bulletCmd) {
+            rotateUtterance(null); // clip contains the command words — discard it
             const chunk = bulletCmd[1].trim();
             // Discard pre-command audio if the user just backspaced — it predates the edit
-            if (chunk && !hadManualEdit) finalDictatedRef.value += (finalDictatedRef.value ? " " : "") + chunk;
-            const raw = [baseText, finalDictatedRef.value].filter(Boolean).join(" ").trim();
-            const noteText = normalizeDictation(raw);
-            if (noteText) addNoteRef.current(noteText);
+            if (chunk && !hadManualEdit) finalDictatedRef.segs.push({ id: nextSegIdRef.current++, text: chunk });
+            const segsToFlush = finalDictatedRef.segs;
+            const baseToFlush = baseText;
             baseText = "";
-            finalDictatedRef.value = "";
+            dictBaseRef.current = "";
+            finalDictatedRef.segs = [];
             setNoteInput("");
+            flushNoteFromSegs(baseToFlush, segsToFlush);
             continue;
           }
           if (/^indent[\s.,!?]*$/i.test(trimmed)) {
+            rotateUtterance(null);
             setNoteIndent((i) => Math.min(2, i + 1));
             continue;
           }
           if (/^out\s?dent[\s.,!?]*$/i.test(trimmed)) {
+            rotateUtterance(null);
             setNoteIndent((i) => Math.max(0, i - 1));
             continue;
           }
-          finalDictatedRef.value += (finalDictatedRef.value ? " " : "") + trimmed;
+          const seg: DictSeg = { id: nextSegIdRef.current++, text: trimmed };
+          finalDictatedRef.segs.push(seg);
+          rotateUtterance(seg); // send this utterance's audio to Aqua for the accurate transcript
         } else {
           interim += transcript;
         }
       }
-      const combined = [baseText, finalDictatedRef.value, interim.trim()].filter(Boolean).join(" ");
-      setNoteInput(normalizeDictation(combined));
+      renderDictation(interim.trim());
     };
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     rec.onerror = (e: any) => {
@@ -343,13 +509,17 @@ export default function BookPage() {
         // Flush any pending manual edit before restarting so the new instance has the correct baseText
         if (manualEditRef.current !== null) {
           baseText = manualEditRef.current.trimEnd();
-          finalDictatedRef.value = "";
+          dictBaseRef.current = baseText;
+          finalDictatedRef.segs = [];
           manualEditRef.current = null;
         }
         // Chrome kills continuous recognition after silence on desktop; restart automatically
         try { startRecognition(baseText, finalDictatedRef); return; } catch { /* fall through */ }
       }
-      // Truly done — release the mic stream and reset chapter mode
+      // Truly done — stop any open utterance recorder (trailing audio has no
+      // final segment to attach to), clear the session cap timer, release the mic
+      rotateUtterance(null);
+      if (sessionTimerRef.current) { clearTimeout(sessionTimerRef.current); sessionTimerRef.current = null; }
       dictationModeRef.current = "note";
       setAwaitingChapterName(false);
       micStreamRef.current?.getTracks().forEach((t) => t.stop());
@@ -361,16 +531,22 @@ export default function BookPage() {
     recognitionRef.current = rec;
   }
 
+  function stopDictation() {
+    if (sessionTimerRef.current) { clearTimeout(sessionTimerRef.current); sessionTimerRef.current = null; }
+    shouldListenRef.current = false;
+    dictationModeRef.current = "note";
+    setAwaitingChapterName(false);
+    recognitionRef.current?.stop?.();
+    // mic stream released in onend after recognition fully stops
+  }
+
   async function toggleDictation() {
     if (!speechSupported) return;
     if (listening) {
-      shouldListenRef.current = false;
-      dictationModeRef.current = "note";
-      setAwaitingChapterName(false);
-      recognitionRef.current?.stop?.();
-      // mic stream released in onend after recognition fully stops
+      stopDictation();
       return;
     }
+    setAutoStopped(false);
     noteInputRef.current?.focus();
 
     // Open the mic first and keep the stream alive through the recognition session.
@@ -387,7 +563,24 @@ export default function BookPage() {
     }
 
     shouldListenRef.current = true;
-    const finalDictatedRef = { value: "" };
+
+    // High-accuracy re-transcription via Aqua — only while under the $10 cap
+    // and only when usage metering loaded successfully (fail closed).
+    aquaSessionRef.current =
+      aquaReadyRef.current &&
+      aquaSecondsRef.current < AQUA_MAX_SECONDS_PER_MONTH &&
+      typeof MediaRecorder !== "undefined";
+    if (aquaSessionRef.current && micStreamRef.current) beginUtterance(micStreamRef.current);
+
+    // Hard 60-second session cap: the mic never stays open longer than a minute.
+    sessionTimerRef.current = setTimeout(() => {
+      if (shouldListenRef.current) {
+        setAutoStopped(true);
+        stopDictation();
+      }
+    }, 60_000);
+
+    const finalDictatedRef = { segs: [] as DictSeg[] };
     startRecognition(noteInput.trimEnd(), finalDictatedRef);
     setListening(true);
   }
@@ -409,6 +602,24 @@ export default function BookPage() {
     setBook(found);
     setActiveChapterId((prev) => prev ?? found.chapters[0]?.id ?? null);
   }, [id, user, authLoading, books, booksLoading, router]);
+
+  // Load this month's Aqua spend. Fails CLOSED: if the usage doc can't be read,
+  // Aqua stays disabled — the $10 cap is only guaranteed while metering works.
+  useEffect(() => {
+    if (!user) return;
+    fetchAquaSecondsUsed(user.uid)
+      .then((s) => {
+        aquaSecondsRef.current = s;
+        aquaReadyRef.current = true;
+        setAquaSecondsUsed(s);
+        setAquaCapped(s >= AQUA_MAX_SECONDS_PER_MONTH);
+      })
+      .catch((e) => {
+        console.error("Aqua usage load failed — high-accuracy dictation disabled:", e);
+        aquaReadyRef.current = false;
+        setAquaSecondsUsed(null);
+      });
+  }, [user]);
 
   async function persist(updated: Book) {
     if (!user) return;
@@ -1227,6 +1438,19 @@ export default function BookPage() {
                     Add
                   </button>
                 </div>
+                {(aquaSecondsUsed !== null || autoStopped || aquaCapped) && (
+                  <p className="text-xs mt-1.5 ml-20">
+                    {aquaSecondsUsed !== null && (
+                      <span className="text-ink-300">
+                        Aqua HD voice: ${aquaSpendUsd(aquaSecondsUsed).toFixed(2)} of ${AQUA_MONTHLY_CAP_USD}.00 this month
+                        {aquaCapped ? " — budget reached, free dictation until next month" : ""}
+                      </span>
+                    )}
+                    {autoStopped && (
+                      <span className="text-amber-600"> · Mic auto-stopped after 60s — tap 🎤 to continue</span>
+                    )}
+                  </p>
+                )}
                 <p className="text-xs text-ink-300 mt-1.5 ml-20">
                   Tab = indent · Shift+Tab = outdent · Enter = add
                   {speechSupported && ` · 🎤 = dictate · ${awaitingChapterName ? "now say chapter name…" : "\"new/next bullet\" · \"new chapter\" · \"indent\" / \"outdent\""}`}
