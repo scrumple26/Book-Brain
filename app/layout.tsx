@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import "./globals.css";
 import { AuthProvider } from "@/context/AuthContext";
 import { BooksProvider } from "@/context/BooksContext";
+import CommandPalette from "./CommandPalette";
 
 export const metadata: Metadata = {
   title: "Book Brain",
@@ -13,7 +14,10 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
     <html lang="en">
       <body className="min-h-screen bg-parchment-50">
         <AuthProvider>
-          <BooksProvider>{children}</BooksProvider>
+          <BooksProvider>
+            {children}
+            <CommandPalette />
+          </BooksProvider>
         </AuthProvider>
       </body>
     </html>

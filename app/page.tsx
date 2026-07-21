@@ -4,9 +4,10 @@ export const dynamic = "force-dynamic";
 
 import { useState, useRef, useEffect } from "react";
 import { useRouter } from "next/navigation";
-import { Book, BookStatus, bookStatus } from "@/lib/types";
+import { Book, BookStatus, bookStatus, QuizCard } from "@/lib/types";
 import { generateId } from "@/lib/storage";
 import { highlight } from "@/lib/highlight";
+import { Grade, isDue, schedule } from "@/lib/srs";
 import { useAuth } from "@/context/AuthContext";
 import { useBooks } from "@/context/BooksContext";
 import { parseBooks, toBook, countNotes, type ParsedBook } from "@/lib/importBook";
@@ -103,6 +104,11 @@ export default function Library() {
   const [activeTag, setActiveTag] = useState<string | null>(null);
   // Which shelf is showing. "library" = everything you own (reading + completed).
   const [view, setView] = useState<"library" | "reading" | "wishlist" | "completed">("library");
+  // #6 cross-book interleaved spaced-repetition review.
+  const [reviewOpen, setReviewOpen] = useState(false);
+  const [reviewQueue, setReviewQueue] = useState<{ bookId: string; card: QuizCard }[]>([]);
+  const [reviewPos, setReviewPos] = useState(0);
+  const [reviewShow, setReviewShow] = useState(false);
 
   // Import: paste or upload a Markdown / CSV file → preview → save as books
   const [showImport, setShowImport] = useState(false);
@@ -339,6 +345,34 @@ export default function Library() {
     return years === 1 ? "1 year ago" : `${years} years ago`;
   }
 
+  // #6 all due flashcards across every book, for an interleaved review session.
+  const dueCards = books.flatMap((b) =>
+    (b.quizCards ?? []).filter((c) => isDue(c)).map((card) => ({ bookId: b.id, card }))
+  );
+
+  function startDueReview() {
+    // Interleave across books (mix topics) rather than reviewing one deck at a time.
+    setReviewQueue([...dueCards].sort(() => Math.random() - 0.5));
+    setReviewPos(0);
+    setReviewShow(false);
+    setReviewOpen(true);
+  }
+
+  async function gradeDueCard(grade: Grade) {
+    const item = reviewQueue[reviewPos];
+    if (item) {
+      const b = books.find((x) => x.id === item.bookId);
+      if (b) {
+        await upsertBook({
+          ...b,
+          quizCards: (b.quizCards ?? []).map((c) => (c.id === item.card.id ? schedule(c, grade) : c)),
+        });
+      }
+    }
+    setReviewShow(false);
+    setReviewPos((p) => p + 1);
+  }
+
   if (loading) {
     return (
       <div className="min-h-screen bg-parchment-50 flex items-center justify-center">
@@ -482,6 +516,22 @@ export default function Library() {
                 )}
               </div>
             )}
+          </div>
+        )}
+
+        {/* #6 Due for review — interleaved across all books */}
+        {!booksLoading && !q && dueCards.length > 0 && (
+          <div className="flex items-center justify-between gap-4 bg-amber-600 text-white rounded-xl px-5 py-4 mb-8">
+            <div className="min-w-0">
+              <p className="text-sm font-semibold">🎯 {dueCards.length} card{dueCards.length !== 1 ? "s" : ""} due for review</p>
+              <p className="text-amber-100 text-xs mt-0.5">Interleaved across your library — recall first, then grade.</p>
+            </div>
+            <button
+              onClick={startDueReview}
+              className="flex-shrink-0 bg-white text-amber-700 text-sm font-medium px-4 py-2 rounded-lg hover:bg-amber-50 transition-colors"
+            >
+              Start review
+            </button>
           </div>
         )}
 
@@ -923,6 +973,65 @@ export default function Library() {
           </div>
         </div>
       )}
+
+      {/* #6 Interleaved due-review overlay */}
+      {reviewOpen && (() => {
+        const item = reviewQueue[reviewPos];
+        const reviewBook = item ? books.find((b) => b.id === item.bookId) : undefined;
+        return (
+          <div
+            className="fixed inset-0 bg-ink-900/60 backdrop-blur-sm flex items-center justify-center z-50 p-4"
+            onClick={() => setReviewOpen(false)}
+          >
+            <div
+              className="bg-white rounded-2xl shadow-xl w-full max-w-lg p-6 flex flex-col gap-4"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-medium text-ink-300 uppercase tracking-wide">🎯 Due review</span>
+                <button onClick={() => setReviewOpen(false)} className="text-ink-300 hover:text-ink-700 text-lg leading-none">×</button>
+              </div>
+              {!item ? (
+                <div className="text-center py-8">
+                  <p className="text-3xl mb-2">🎉</p>
+                  <p className="text-ink-500 text-sm">
+                    All caught up — {reviewQueue.length} card{reviewQueue.length !== 1 ? "s" : ""} reviewed.
+                  </p>
+                </div>
+              ) : (
+                <>
+                  <span className="text-xs text-ink-300">
+                    {reviewPos + 1} of {reviewQueue.length}
+                    {reviewBook ? ` · ${reviewBook.title}` : ""}
+                  </span>
+                  <p className="font-serif text-ink-900 text-lg leading-snug">{item.card.question}</p>
+                  {reviewShow ? (
+                    <>
+                      <div className="bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 text-sm text-ink-800 whitespace-pre-wrap">{item.card.answer}</div>
+                      <div className="grid grid-cols-4 gap-2 mt-2">
+                        {([
+                          ["again", "Again", "text-red-600 border-red-200 hover:bg-red-50"],
+                          ["hard", "Hard", "text-amber-700 border-amber-200 hover:bg-amber-50"],
+                          ["good", "Good", "text-green-700 border-green-200 hover:bg-green-50"],
+                          ["easy", "Easy", "text-blue-700 border-blue-200 hover:bg-blue-50"],
+                        ] as const).map(([g, label, cls]) => (
+                          <button
+                            key={g}
+                            onClick={() => gradeDueCard(g)}
+                            className={`text-xs font-medium py-2 rounded-lg border bg-white transition-colors ${cls}`}
+                          >{label}</button>
+                        ))}
+                      </div>
+                    </>
+                  ) : (
+                    <button onClick={() => setReviewShow(true)} className="bg-amber-600 hover:bg-amber-500 text-white text-sm font-medium px-4 py-2.5 rounded-lg transition-colors">Reveal Answer</button>
+                  )}
+                </>
+              )}
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 }
