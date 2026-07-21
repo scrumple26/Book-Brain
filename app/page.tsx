@@ -4,7 +4,7 @@ export const dynamic = "force-dynamic";
 
 import { useState, useRef, useEffect } from "react";
 import { useRouter } from "next/navigation";
-import { Book } from "@/lib/types";
+import { Book, BookStatus, bookStatus } from "@/lib/types";
 import { generateId } from "@/lib/storage";
 import { useAuth } from "@/context/AuthContext";
 import { useBooks } from "@/context/BooksContext";
@@ -97,8 +97,11 @@ export default function Library() {
   const [author, setAuthor] = useState("");
   const [newTags, setNewTags] = useState<string[]>([]);
   const [dateCompleted, setDateCompleted] = useState("");
+  const [newStatus, setNewStatus] = useState<BookStatus>("reading");
   const [search, setSearch] = useState("");
   const [activeTag, setActiveTag] = useState<string | null>(null);
+  // Which shelf is showing. "library" = everything you own (reading + completed).
+  const [view, setView] = useState<"library" | "reading" | "wishlist" | "completed">("library");
 
   // Import: paste or upload a Markdown / CSV file → preview → save as books
   const [showImport, setShowImport] = useState(false);
@@ -166,22 +169,38 @@ export default function Library() {
     setAuthor("");
     setNewTags([]);
     setDateCompleted("");
+    setNewStatus("reading");
     setShowForm(false);
   }
 
   async function addBook() {
     if (!user || !title.trim() || !author.trim()) return;
+    const completed = newStatus === "completed";
     const book: Book = {
       id: generateId(),
       title: title.trim(),
       author: author.trim(),
       tags: newTags,
-      dateCompleted: dateCompleted || undefined,
+      status: newStatus,
+      // A completion date only makes sense on the completed shelf.
+      dateCompleted: completed ? (dateCompleted || todayStr) : undefined,
       createdAt: new Date().toISOString(),
       chapters: [],
     };
     resetForm();
     await upsertBook(book);
+  }
+
+  // Move a book between shelves; completing stamps today (keeping any existing
+  // date), and leaving the completed shelf clears the completion date.
+  async function moveBook(book: Book, status: BookStatus, e: React.MouseEvent) {
+    e.stopPropagation();
+    const updated: Book = {
+      ...book,
+      status,
+      dateCompleted: status === "completed" ? (book.dateCompleted ?? todayStr) : undefined,
+    };
+    await upsertBook(updated);
   }
 
   async function handleDeleteBook(id: string, e: React.MouseEvent) {
@@ -231,14 +250,25 @@ export default function Library() {
   // All unique tags across all books
   const allTags = Array.from(new Set(books.flatMap((b) => b.tags ?? []))).sort();
 
+  // Shelf counts for the view tabs. "library" = everything except the wishlist.
+  const shelfCounts = {
+    library: books.filter((b) => bookStatus(b) !== "wishlist").length,
+    reading: books.filter((b) => bookStatus(b) === "reading").length,
+    wishlist: books.filter((b) => bookStatus(b) === "wishlist").length,
+    completed: books.filter((b) => bookStatus(b) === "completed").length,
+  };
+
   const filtered = books.filter((b) => {
+    const status = bookStatus(b);
+    const matchesView =
+      view === "library" ? status !== "wishlist" : status === view;
     const matchesSearch =
       !search ||
       b.title.toLowerCase().includes(search.toLowerCase()) ||
       b.author.toLowerCase().includes(search.toLowerCase()) ||
       (b.tags ?? []).some((t) => t.toLowerCase().includes(search.toLowerCase()));
     const matchesTag = !activeTag || (b.tags ?? []).includes(activeTag);
-    return matchesSearch && matchesTag;
+    return matchesView && matchesSearch && matchesTag;
   });
 
   if (loading) {
@@ -299,6 +329,29 @@ export default function Library() {
             <span className="text-xs text-red-500">Check your Firestore security rules in the Firebase Console.</span>
           </div>
         )}
+
+        {/* Shelf tabs */}
+        <div className="flex flex-wrap gap-1.5 mb-4">
+          {([
+            ["library", "📚 Library", shelfCounts.library],
+            ["reading", "📖 Reading", shelfCounts.reading],
+            ["wishlist", "🔖 Wishlist", shelfCounts.wishlist],
+            ["completed", "✓ Completed", shelfCounts.completed],
+          ] as const).map(([key, label, count]) => (
+            <button
+              key={key}
+              onClick={() => setView(key)}
+              className={`text-sm font-medium px-3.5 py-1.5 rounded-lg border transition-colors ${
+                view === key
+                  ? "bg-amber-600 text-white border-amber-600"
+                  : "bg-white text-ink-500 border-parchment-300 hover:border-amber-500 hover:text-amber-600"
+              }`}
+            >
+              {label}{" "}
+              <span className={view === key ? "text-amber-100" : "text-ink-300"}>{count}</span>
+            </button>
+          ))}
+        </div>
 
         {/* Search */}
         <div className="mb-4">
@@ -372,7 +425,7 @@ export default function Library() {
                   className="w-full border border-parchment-300 rounded-lg px-3 py-2 text-sm text-ink-900 focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-transparent bg-white"
                 >
                   <option value="">Select book…</option>
-                  {books.map((b) => (
+                  {books.filter((b) => bookStatus(b) !== "wishlist").map((b) => (
                     <option key={b.id} value={b.id}>{b.title}</option>
                   ))}
                 </select>
@@ -445,17 +498,34 @@ export default function Library() {
           </div>
         ) : filtered.length === 0 ? (
           <div className="text-center py-24">
-            <p className="text-5xl mb-4">📚</p>
+            <p className="text-5xl mb-4">{view === "wishlist" ? "🔖" : "📚"}</p>
             <p className="text-ink-500 text-lg font-serif italic">
-              {search || activeTag ? "No books match your filter." : "Your library is empty."}
+              {search || activeTag
+                ? "No books match your filter."
+                : view === "wishlist"
+                ? "Your wishlist is empty."
+                : view === "reading"
+                ? "You're not reading anything right now."
+                : view === "completed"
+                ? "No finished books yet."
+                : "Your library is empty."}
             </p>
             {!search && !activeTag && (
-              <p className="text-ink-300 text-sm mt-2">Add your first book to get started.</p>
+              <p className="text-ink-300 text-sm mt-2">
+                {view === "wishlist"
+                  ? "Add books you want to read next."
+                  : view === "completed"
+                  ? "Books you finish will show up here."
+                  : "Add your first book to get started."}
+              </p>
             )}
           </div>
         ) : (
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-            {filtered.map((book) => (
+            {filtered.map((book) => {
+              const status = bookStatus(book);
+              const noteCount = book.chapters.reduce((acc, c) => acc + c.notes.length, 0);
+              return (
               <div
                 key={book.id}
                 onClick={() => router.push(`/book/${book.id}`)}
@@ -495,24 +565,42 @@ export default function Library() {
                   </div>
                 )}
 
-                <div className="mt-3 pt-3 border-t border-parchment-200 flex items-center gap-3 text-xs text-ink-300">
-                  <span>{book.chapters.length} chapter{book.chapters.length !== 1 ? "s" : ""}</span>
-                  <span>·</span>
-                  <span>
-                    {book.chapters.reduce((acc, c) => acc + c.notes.length, 0)} note
-                    {book.chapters.reduce((acc, c) => acc + c.notes.length, 0) !== 1 ? "s" : ""}
-                  </span>
-                  {book.dateCompleted && (
-                    <>
-                      <span>·</span>
-                      <span className="text-amber-600 font-medium">
-                        ✓ {new Date(book.dateCompleted + "T00:00:00").toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })}
-                      </span>
-                    </>
-                  )}
-                </div>
+                {status === "wishlist" ? (
+                  <div className="mt-3 pt-3 border-t border-parchment-200 flex items-center justify-between text-xs">
+                    <span className="text-ink-300 italic">Want to read</span>
+                    <button
+                      onClick={(e) => moveBook(book, "reading", e)}
+                      className="opacity-0 group-hover:opacity-100 text-amber-600 hover:text-amber-700 font-medium transition-all"
+                    >
+                      Start reading →
+                    </button>
+                  </div>
+                ) : (
+                  <div className="mt-3 pt-3 border-t border-parchment-200 flex items-center gap-3 text-xs text-ink-300">
+                    <span>{book.chapters.length} chapter{book.chapters.length !== 1 ? "s" : ""}</span>
+                    <span>·</span>
+                    <span>{noteCount} note{noteCount !== 1 ? "s" : ""}</span>
+                    {book.dateCompleted && (
+                      <>
+                        <span>·</span>
+                        <span className="text-amber-600 font-medium">
+                          ✓ {new Date(book.dateCompleted + "T00:00:00").toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })}
+                        </span>
+                      </>
+                    )}
+                    {status === "reading" && (
+                      <button
+                        onClick={(e) => moveBook(book, "completed", e)}
+                        className="ml-auto opacity-0 group-hover:opacity-100 text-amber-600 hover:text-amber-700 font-medium transition-all"
+                      >
+                        ✓ Complete
+                      </button>
+                    )}
+                  </div>
+                )}
               </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </main>
@@ -645,15 +733,42 @@ export default function Library() {
               </div>
               <div>
                 <label className="block text-xs font-medium text-ink-500 uppercase tracking-wide mb-1.5">
-                  Date Completed <span className="normal-case text-ink-300 font-normal">(optional)</span>
+                  Shelf
                 </label>
-                <input
-                  type="date"
-                  value={dateCompleted}
-                  onChange={(e) => setDateCompleted(e.target.value)}
-                  className="w-full border border-parchment-300 rounded-lg px-3 py-2.5 text-sm text-ink-900 focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-transparent"
-                />
+                <div className="flex gap-1.5">
+                  {([
+                    ["reading", "📖 Reading"],
+                    ["wishlist", "🔖 Wishlist"],
+                    ["completed", "✓ Completed"],
+                  ] as const).map(([key, label]) => (
+                    <button
+                      type="button"
+                      key={key}
+                      onClick={() => setNewStatus(key)}
+                      className={`flex-1 text-xs font-medium py-2 rounded-lg border transition-colors ${
+                        newStatus === key
+                          ? "bg-amber-600 text-white border-amber-600"
+                          : "bg-white text-ink-500 border-parchment-300 hover:border-amber-500"
+                      }`}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
               </div>
+              {newStatus === "completed" && (
+                <div>
+                  <label className="block text-xs font-medium text-ink-500 uppercase tracking-wide mb-1.5">
+                    Date Completed <span className="normal-case text-ink-300 font-normal">(optional)</span>
+                  </label>
+                  <input
+                    type="date"
+                    value={dateCompleted}
+                    onChange={(e) => setDateCompleted(e.target.value)}
+                    className="w-full border border-parchment-300 rounded-lg px-3 py-2.5 text-sm text-ink-900 focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-transparent"
+                  />
+                </div>
+              )}
               <div>
                 <label className="block text-xs font-medium text-ink-500 uppercase tracking-wide mb-1.5">
                   Tags <span className="normal-case text-ink-300 font-normal">(optional)</span>
