@@ -138,12 +138,23 @@ export default function Library() {
   const [logPages, setLogPages] = useState("");
   const [logBookId, setLogBookId] = useState("");
 
-  // Feature 6: Random notes — computed once after books first load
+  // Feature 6: Resurfaced notes — weighted pick, refreshed after books load.
   const [randomNotes, setRandomNotes] = useState<{ text: string; bookTitle: string; chapterName: string; bold: boolean }[]>([]);
   const randomNotesPicked = useRef(false);
   function pickRandomNotes() {
-    const pool: { text: string; bookTitle: string; chapterName: string; bold: boolean }[] = [];
+    // Bias resurfacing toward notes whose book you shared a tag with the one you
+    // last opened, so what's relevant to recent interest surfaces more.
+    let lastBookTags = new Set<string>();
+    try {
+      const lastId = localStorage.getItem("bb:lastBook");
+      const lastBook = lastId ? books.find((b) => b.id === lastId) : undefined;
+      lastBookTags = new Set(lastBook?.tags ?? []);
+    } catch { /* localStorage unavailable — no related-book boost */ }
+
+    const pool: { text: string; bookTitle: string; chapterName: string; bold: boolean; score: number }[] = [];
     for (const b of books) {
+      const status = bookStatus(b);
+      const relatedToLast = lastBookTags.size > 0 && (b.tags ?? []).some((t) => lastBookTags.has(t));
       for (const c of b.chapters.filter((ch) => !ch.deleted)) {
         let mainBullet: string | null = null;
         for (const n of c.notes) {
@@ -151,13 +162,21 @@ export default function Library() {
           const source = (n.indent ?? 0) > 0 && mainBullet !== null
             ? (mainBullet.length > 60 ? mainBullet.slice(0, 60) + "…" : mainBullet)
             : c.name;
-          pool.push({ text: n.text, bookTitle: b.title, chapterName: source, bold: n.bold ?? false });
+          const bold = n.bold ?? false;
+          // Score = jitter + signals, so the pick is weighted but still varies
+          // on refresh: currently-reading books, key (bolded) points, and notes
+          // related to what you last opened all rise to the top.
+          let score = Math.random();
+          if (status === "reading") score += 1.2;
+          if (bold) score += 0.5;
+          if (relatedToLast) score += 0.8;
+          pool.push({ text: n.text, bookTitle: b.title, chapterName: source, bold, score });
         }
       }
     }
     if (pool.length === 0) return false;
-    const shuffled = [...pool].sort(() => Math.random() - 0.5);
-    setRandomNotes(shuffled.slice(0, 5));
+    pool.sort((a, b) => b.score - a.score);
+    setRandomNotes(pool.slice(0, 5).map(({ text, bookTitle, chapterName, bold }) => ({ text, bookTitle, chapterName, bold })));
     return true;
   }
   useEffect(() => {
@@ -208,6 +227,13 @@ export default function Library() {
     e.stopPropagation();
     if (!confirm("Delete this book and all its notes?")) return;
     await removeBook(id);
+  }
+
+  // Open a book, remembering it as the most recently opened so resurfacing can
+  // bias toward related notes next time the library is shown.
+  function openBook(id: string) {
+    try { localStorage.setItem("bb:lastBook", id); } catch { /* ignore */ }
+    router.push(`/book/${id}`);
   }
 
   // Feature 7: Reading log submit
@@ -438,7 +464,7 @@ export default function Library() {
                 {noteMatches.slice(0, NOTE_RESULT_LIMIT).map(({ note, book, chapter }) => (
                   <button
                     key={note.id}
-                    onClick={() => router.push(`/book/${book.id}`)}
+                    onClick={() => openBook(book.id)}
                     className="block w-full text-left bg-white border border-parchment-200 rounded-lg px-4 py-3 hover:border-amber-500 hover:shadow-sm transition-all"
                   >
                     <p className={`text-sm text-ink-800 leading-snug ${note.bold ? "font-bold" : ""}`}>
@@ -467,7 +493,7 @@ export default function Library() {
               {onThisDay.slice(0, 6).map(({ note, book, chapter, when }) => (
                 <button
                   key={note.id}
-                  onClick={() => router.push(`/book/${book.id}`)}
+                  onClick={() => openBook(book.id)}
                   className="block text-left border-l-2 border-amber-300 pl-3 hover:border-amber-500 transition-colors"
                 >
                   <p className={`text-sm text-ink-800 leading-snug ${note.bold ? "font-bold" : ""}`}>{note.text}</p>
@@ -631,7 +657,7 @@ export default function Library() {
               return (
               <div
                 key={book.id}
-                onClick={() => router.push(`/book/${book.id}`)}
+                onClick={() => openBook(book.id)}
                 className="group bg-white border border-parchment-200 rounded-xl p-5 cursor-pointer hover:border-amber-500 hover:shadow-md transition-all"
               >
                 <div className="flex justify-between items-start gap-2">
