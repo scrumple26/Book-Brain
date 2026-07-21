@@ -116,7 +116,10 @@ function highlight(text: string, query: string): React.ReactNode {
 
 // Turn spoken punctuation words into glyphs, fix spacing, and auto-capitalize.
 // Idempotent: safe to apply repeatedly as more transcript text arrives.
-function normalizeDictation(text: string): string {
+// `preserveCase` keeps existing capitalization (used for Aqua/Avalon text,
+// which is already correctly cased) while still honoring spoken punctuation
+// words like "quotation" and "period".
+function normalizeDictation(text: string, preserveCase = false): string {
   if (!text) return text;
   // Order: longer phrases first so "exclamation point" beats "exclamation".
   const subs: [RegExp, string][] = [
@@ -140,8 +143,9 @@ function normalizeDictation(text: string): string {
   ];
   let out = text;
   for (const [re, repl] of subs) out = out.replace(re, repl);
-  // Lowercase everything first so Chrome's mid-segment capitalizations are stripped
-  out = out.toLowerCase();
+  // Lowercase first so Chrome's mid-segment capitalizations are stripped — but
+  // not for already-cased Aqua text.
+  if (!preserveCase) out = out.toLowerCase();
   // Remove space before closing punctuation / inside an opening paren
   out = out.replace(/\s+([.,!?;:)])/g, "$1");
   out = out.replace(/(\()\s+/g, "$1");
@@ -174,7 +178,9 @@ type DictSeg = { id: number; text: string; clean?: boolean };
 
 function segsToText(segs: DictSeg[]): string {
   return segs
-    .map((s) => (s.clean ? s.text : normalizeDictation(s.text)))
+    // Aqua (clean) text keeps its casing but still gets spoken-punctuation
+    // words ("quotation" -> ") turned into glyphs.
+    .map((s) => (s.clean ? normalizeDictation(s.text, true) : normalizeDictation(s.text)))
     .filter(Boolean)
     .join(" ")
     .replace(/ {2,}/g, " ")
@@ -243,6 +249,10 @@ export default function BookPage() {
   const nextSegIdRef = useRef(1);
   const dictBaseRef = useRef("");
   const dictSegsRef = useRef<{ segs: DictSeg[] } | null>(null);
+  // A committed note is saved instantly from Web Speech; when its Aqua clips
+  // land later they patch the saved note in place (never the live input).
+  const noteSegsRef = useRef<Map<string, { chapterId: string; segs: DictSeg[] }>>(new Map());
+  const segNoteRef = useRef<Map<number, string>>(new Map()); // segId -> committed noteId
 
   const speechSupported =
     typeof window !== "undefined" &&
@@ -305,6 +315,9 @@ export default function BookPage() {
       if (blob.size === 0) return;
       const p = transcribeUtterance(blob, durationSec, forSeg).finally(() => {
         pendingAvalonRef.current.delete(forSeg.id);
+        // Once every clip for the owning note has resolved, drop its patch-
+        // tracking entries so the maps don't grow for the whole session.
+        prunePatchTracking(forSeg);
       });
       pendingAvalonRef.current.set(forSeg.id, p);
     };
@@ -340,7 +353,17 @@ export default function BookPage() {
     // Meter BEFORE sending — the cap may only ever overcount, never undercount.
     aquaSecondsRef.current += durationSec;
     setAquaSecondsUsed(aquaSecondsRef.current);
-    addAquaSecondsUsed(uid, durationSec).catch((e) => console.error("Aqua usage write failed:", e));
+    // AWAIT the durable meter write and fail CLOSED if it throws (invariant d):
+    // a swallowed usage write would undercount the $10 cap across sessions, so a
+    // failed write must disable HD dictation instead of letting this clip spend.
+    try {
+      await addAquaSecondsUsed(uid, durationSec);
+    } catch (e) {
+      console.error("Aqua usage write failed — disabling HD dictation this session:", e);
+      aquaSessionRef.current = false;
+      aquaReadyRef.current = false;
+      return; // do not send this clip; the Web Speech text stands
+    }
     try {
       const fd = new FormData();
       fd.append("audio", blob, "utterance.webm");
@@ -357,32 +380,95 @@ export default function BookPage() {
         .replace(/ {2,}/g, " ")
         .trim();
       if (!text) return;
-      const f = dictSegsRef.current;
-      const target = f?.segs.find((s) => s.id === seg.id);
-      if (target) {
-        target.text = text;
-        target.clean = true;
+      seg.text = text;
+      seg.clean = true;
+
+      const committedNoteId = segNoteRef.current.get(seg.id);
+      if (committedNoteId) {
+        // This clip belongs to a note that's already saved — upgrade it in place.
+        patchSavedNote(committedNoteId);
+      } else if (
+        shouldListenRef.current &&
+        !autoStopped &&
+        dictSegsRef.current?.segs.some((s) => s.id === seg.id)
+      ) {
+        // Still being dictated and untouched — refresh the live field.
         renderDictation();
       }
+      // Otherwise the seg was backspaced/abandoned — do nothing (no reappear).
     } catch {
       // network hiccup — the Web Speech text stands
     }
   }
 
-  /** Wait briefly for in-flight Aqua transcripts, then add the note. */
-  function flushNoteFromSegs(base: string, segs: DictSeg[]) {
-    const pending = segs
-      .map((s) => pendingAvalonRef.current.get(s.id))
-      .filter((p): p is Promise<void> => Boolean(p));
-    const finish = () => {
-      const raw = [base, segsToText(segs)].filter(Boolean).join(" ").trim();
-      if (raw) addNoteRef.current(raw);
+  /** Rebuild a saved note's text from its (now possibly cleaner) segments. */
+  function patchSavedNote(noteId: string) {
+    const entry = noteSegsRef.current.get(noteId);
+    const current = bookRef.current;
+    if (!entry || !current) return;
+    const text = finalizeDictated(segsToText(entry.segs));
+    if (!text) return;
+    persist({
+      ...current,
+      chapters: current.chapters.map((c) =>
+        c.id === entry.chapterId
+          ? { ...c, notes: c.notes.map((n) => (n.id === noteId ? { ...n, text } : n)) }
+          : c,
+      ),
+    });
+  }
+
+  /** After a committed note's clips have all resolved, remove its patch-tracking
+   *  entries. Without this, noteSegsRef/segNoteRef grow unbounded for the life of
+   *  the page even though no further patch can ever arrive for the note. */
+  function prunePatchTracking(seg: DictSeg) {
+    const noteId = segNoteRef.current.get(seg.id);
+    if (!noteId) return;
+    const entry = noteSegsRef.current.get(noteId);
+    if (!entry) { segNoteRef.current.delete(seg.id); return; }
+    // Keep the entry alive while any of the note's clips are still in flight.
+    if (entry.segs.some((s) => pendingAvalonRef.current.has(s.id))) return;
+    noteSegsRef.current.delete(noteId);
+    for (const s of entry.segs) segNoteRef.current.delete(s.id);
+  }
+
+  // Strip stray voice-command words and ensure sentence-closing punctuation.
+  function finalizeDictated(raw: string): string {
+    let text = raw.replace(/\b(?:new|next)\s+bullet\b[\s.,!?]*/gi, "").trim();
+    if (!text) return "";
+    if (!/[.!?"]$/.test(text)) text += ".";
+    return text;
+  }
+
+  /** Save a note from the current dictation segments IMMEDIATELY (no waiting on
+   *  Aqua). If any clip is still in flight, register the note so the clip can
+   *  patch it once it lands. */
+  function commitNote(base: string, segs: DictSeg[]) {
+    const targetChapterId = activeChapterId;
+    if (!targetChapterId) return;
+    const text = finalizeDictated([base, segsToText(segs)].filter(Boolean).join(" ").trim());
+    if (!text) return;
+    const noteId = generateId();
+    const note: Note = {
+      id: noteId,
+      text,
+      indent: noteIndent,
+      type: noteType,
+      createdAt: new Date().toISOString(),
     };
-    if (pending.length === 0) {
-      finish();
-      return;
+    const current = bookRef.current;
+    if (!current) return;
+    persist({
+      ...current,
+      chapters: current.chapters.map((c) =>
+        c.id === targetChapterId ? { ...c, notes: [...c.notes, note] } : c,
+      ),
+    });
+    // Register for Aqua patching only while clips are still pending.
+    if (segs.some((s) => pendingAvalonRef.current.has(s.id))) {
+      noteSegsRef.current.set(noteId, { chapterId: targetChapterId, segs });
+      for (const s of segs) segNoteRef.current.set(s.id, noteId);
     }
-    Promise.race([Promise.allSettled(pending), new Promise((r) => setTimeout(r, 3000))]).then(finish);
   }
 
   function startRecognition(baseText: string, finalDictatedRef: { segs: DictSeg[] }) {
@@ -397,6 +483,9 @@ export default function BookPage() {
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     rec.onresult = (e: any) => {
+      // Ignore any results that arrive after the user stopped (typed, edited,
+      // or hit the button) — otherwise late audio repaints a cleared field.
+      if (!shouldListenRef.current) return;
       // If the user manually edited the field, sync accumulated state to what they left.
       // hadManualEdit lets command handlers discard Chrome audio that predates the edit.
       let hadManualEdit = false;
@@ -451,7 +540,7 @@ export default function BookPage() {
             setNoteInput("");
             dictationModeRef.current = "chapter";
             setAwaitingChapterName(true);
-            flushNoteFromSegs(baseToFlush, segsToFlush);
+            commitNoteRef.current(baseToFlush, segsToFlush);
             continue;
           }
 
@@ -469,7 +558,7 @@ export default function BookPage() {
             dictBaseRef.current = "";
             finalDictatedRef.segs = [];
             setNoteInput("");
-            flushNoteFromSegs(baseToFlush, segsToFlush);
+            commitNoteRef.current(baseToFlush, segsToFlush);
             continue;
           }
           if (/^indent[\s.,!?]*$/i.test(trimmed)) {
@@ -618,12 +707,18 @@ export default function BookPage() {
 
   async function persist(updated: Book) {
     if (!user) return;
+    // Keep the ref in sync synchronously so back-to-back writes in the same
+    // tick — e.g. two Aqua clips landing and each patching a saved note — read
+    // the latest book instead of a stale one and clobbering each other. The
+    // useEffect below stays as the backstop for setBook calls that skip persist.
+    bookRef.current = updated;
     setBook(updated);
     await upsertBook(updated);
   }
 
   function addChapter() {
-    if (!book || !chapterInput.trim()) return;
+    const current = bookRef.current;
+    if (!current || !chapterInput.trim()) return;
     const num = chapterNumberInput.trim();
     const chapter: Chapter = {
       id: generateId(),
@@ -631,7 +726,7 @@ export default function BookPage() {
       notes: [],
       ...(num ? { number: num } : {}),
     };
-    const updated = { ...book, chapters: [...book.chapters, chapter] };
+    const updated = { ...current, chapters: [...current.chapters, chapter] };
     persist(updated);
     setActiveChapterId(chapter.id);
     setChapterInput("");
@@ -640,11 +735,12 @@ export default function BookPage() {
   }
 
   function deleteChapter(chapterId: string) {
-    if (!book) return;
-    const chapter = book.chapters.find((c) => c.id === chapterId);
+    const current = bookRef.current;
+    if (!current) return;
+    const chapter = current.chapters.find((c) => c.id === chapterId);
     if (!chapter) return;
     if (chapter.notes.length > 0 && !confirm("Delete this chapter? You can restore it later.")) return;
-    const updated = { ...book, chapters: book.chapters.map((c) => c.id === chapterId ? { ...c, deleted: true } : c) };
+    const updated = { ...current, chapters: current.chapters.map((c) => c.id === chapterId ? { ...c, deleted: true } : c) };
     persist(updated);
     if (activeChapterId === chapterId) {
       const firstAlive = updated.chapters.find((c) => !c.deleted);
@@ -653,15 +749,17 @@ export default function BookPage() {
   }
 
   function restoreChapter(chapterId: string) {
-    if (!book) return;
-    persist({ ...book, chapters: book.chapters.map((c) => c.id === chapterId ? { ...c, deleted: false } : c) });
+    const current = bookRef.current;
+    if (!current) return;
+    persist({ ...current, chapters: current.chapters.map((c) => c.id === chapterId ? { ...c, deleted: false } : c) });
   }
 
   function toggleNoteBold(chapterId: string, noteId: string) {
-    if (!book) return;
+    const current = bookRef.current;
+    if (!current) return;
     persist({
-      ...book,
-      chapters: book.chapters.map((c) =>
+      ...current,
+      chapters: current.chapters.map((c) =>
         c.id === chapterId
           ? { ...c, notes: c.notes.map((n) => n.id === noteId ? { ...n, bold: !n.bold } : n) }
           : c
@@ -678,27 +776,30 @@ export default function BookPage() {
   }
 
   function addQuizCard() {
-    if (!book) return;
+    const current = bookRef.current;
+    if (!current) return;
     const question = newQuizQ.trim();
     const answer = newQuizA.trim();
     if (!question || !answer) return;
     const card: QuizCard = { id: generateId(), question, answer };
-    persist({ ...book, quizCards: [...(book.quizCards ?? []), card] });
+    persist({ ...current, quizCards: [...(current.quizCards ?? []), card] });
     setNewQuizQ("");
     setNewQuizA("");
   }
 
   function deleteQuizCard(cardId: string) {
-    if (!book) return;
-    persist({ ...book, quizCards: (book.quizCards ?? []).filter((c) => c.id !== cardId) });
+    const current = bookRef.current;
+    if (!current) return;
+    persist({ ...current, quizCards: (current.quizCards ?? []).filter((c) => c.id !== cardId) });
   }
 
   function saveChapterName(chapterId: string) {
-    if (!book || !editingChapterName.trim()) return;
+    const current = bookRef.current;
+    if (!current || !editingChapterName.trim()) return;
     const num = editingChapterNumber.trim();
     persist({
-      ...book,
-      chapters: book.chapters.map((c) =>
+      ...current,
+      chapters: current.chapters.map((c) =>
         c.id === chapterId
           ? { ...c, name: editingChapterName.trim(), number: num || undefined }
           : c
@@ -709,6 +810,21 @@ export default function BookPage() {
 
   async function addNote(textOverride?: string) {
     if (!book || !activeChapterId) return;
+
+    // Add button / Enter pressed mid-dictation: finalize the current spoken
+    // note through the segment path (saves instantly, lets Aqua patch it),
+    // and clear the live dictation state so no stale audio repaints the field.
+    if (textOverride === undefined && listening && dictSegsRef.current) {
+      const segs = dictSegsRef.current.segs;
+      const base = dictBaseRef.current;
+      dictBaseRef.current = "";
+      dictSegsRef.current.segs = [];
+      setNoteInput("");
+      noteInputRef.current?.focus();
+      commitNote(base, segs);
+      return;
+    }
+
     const targetChapterId = activeChapterId;
     let text = (textOverride ?? noteInput).trim();
     if (!text) return;
@@ -750,6 +866,11 @@ export default function BookPage() {
   const addNoteRef = useRef(addNote);
   useEffect(() => { addNoteRef.current = addNote; });
 
+  // Same, for commitNote — the long-lived speech callback must use the latest
+  // closure so it targets the current chapter / indent / type.
+  const commitNoteRef = useRef(commitNote);
+  useEffect(() => { commitNoteRef.current = commitNote; });
+
   function addChapterFromVoice(number: string, name: string) {
     const current = bookRef.current;
     if (!current || !name.trim()) return;
@@ -767,10 +888,11 @@ export default function BookPage() {
   useEffect(() => { addChapterFromVoiceRef.current = addChapterFromVoice; });
 
   function changeNoteIndent(chapterId: string, noteId: string, delta: number) {
-    if (!book) return;
+    const current = bookRef.current;
+    if (!current) return;
     persist({
-      ...book,
-      chapters: book.chapters.map((c) =>
+      ...current,
+      chapters: current.chapters.map((c) =>
         c.id === chapterId
           ? { ...c, notes: c.notes.map((n) => n.id === noteId ? { ...n, indent: Math.max(0, Math.min(2, (n.indent ?? 0) + delta)) } : n) }
           : c
@@ -779,13 +901,16 @@ export default function BookPage() {
   }
 
   function deleteNote(chapterId: string, noteId: string) {
-    if (!book) return;
-    persist({ ...book, chapters: book.chapters.map((c) => c.id === chapterId ? { ...c, notes: c.notes.filter((n) => n.id !== noteId) } : c) });
+    const current = bookRef.current;
+    if (!current) return;
+    noteSegsRef.current.delete(noteId); // cancel any pending Aqua patch
+    persist({ ...current, chapters: current.chapters.map((c) => c.id === chapterId ? { ...c, notes: c.notes.filter((n) => n.id !== noteId) } : c) });
   }
 
   function reorderNote(chapterId: string, fromId: string, toId: string) {
-    if (!book || fromId === toId) return;
-    const chapter = book.chapters.find((c) => c.id === chapterId);
+    const current = bookRef.current;
+    if (!current || fromId === toId) return;
+    const chapter = current.chapters.find((c) => c.id === chapterId);
     if (!chapter) return;
     const notes = [...chapter.notes];
     const fromIdx = notes.findIndex((n) => n.id === fromId);
@@ -793,16 +918,21 @@ export default function BookPage() {
     if (fromIdx === -1 || toIdx === -1) return;
     const [moved] = notes.splice(fromIdx, 1);
     notes.splice(toIdx, 0, moved);
-    persist({ ...book, chapters: book.chapters.map((c) => c.id === chapterId ? { ...c, notes } : c) });
+    persist({ ...current, chapters: current.chapters.map((c) => c.id === chapterId ? { ...c, notes } : c) });
   }
 
   function moveNoteToChapter(fromChapterId: string, noteId: string, toChapterId: string) {
-    if (!book || fromChapterId === toChapterId) return;
-    const note = book.chapters.find((c) => c.id === fromChapterId)?.notes.find((n) => n.id === noteId);
+    const current = bookRef.current;
+    if (!current || fromChapterId === toChapterId) return;
+    const note = current.chapters.find((c) => c.id === fromChapterId)?.notes.find((n) => n.id === noteId);
     if (!note) return;
+    // Re-home any pending Aqua patch so a late clip lands in the new chapter
+    // instead of the old one (patchSavedNote matches on entry.chapterId).
+    const entry = noteSegsRef.current.get(noteId);
+    if (entry) entry.chapterId = toChapterId;
     persist({
-      ...book,
-      chapters: book.chapters.map((c) => {
+      ...current,
+      chapters: current.chapters.map((c) => {
         if (c.id === fromChapterId) return { ...c, notes: c.notes.filter((n) => n.id !== noteId) };
         if (c.id === toChapterId) return { ...c, notes: [...c.notes, note] };
         return c;
@@ -811,10 +941,12 @@ export default function BookPage() {
   }
 
   function saveNoteEdit(chapterId: string, noteId: string) {
-    if (!book || !editingNoteText.trim()) return;
+    const current = bookRef.current;
+    if (!current || !editingNoteText.trim()) return;
+    noteSegsRef.current.delete(noteId); // your edit wins over any pending Aqua patch
     persist({
-      ...book,
-      chapters: book.chapters.map((c) =>
+      ...current,
+      chapters: current.chapters.map((c) =>
         c.id === chapterId
           ? { ...c, notes: c.notes.map((n) => n.id === noteId ? { ...n, text: editingNoteText.trim(), indent: editingNoteIndent, type: editingNoteType, bold: editingNoteBold } : n) }
           : c
@@ -868,12 +1000,12 @@ export default function BookPage() {
               <input
                 type="date"
                 value={book.dateCompleted ?? ""}
-                onChange={(e) => persist({ ...book, dateCompleted: e.target.value || undefined })}
+                onChange={(e) => { const current = bookRef.current; if (current) persist({ ...current, dateCompleted: e.target.value || undefined }); }}
                 className="text-xs border border-parchment-300 rounded px-2 py-1 text-ink-700 focus:outline-none focus:ring-1 focus:ring-amber-500 bg-white"
               />
               {book.dateCompleted && (
                 <button
-                  onClick={() => persist({ ...book, dateCompleted: undefined })}
+                  onClick={() => { const current = bookRef.current; if (current) persist({ ...current, dateCompleted: undefined }); }}
                   className="text-ink-300 hover:text-red-400 text-xs"
                   title="Clear date"
                 >×</button>
@@ -1178,7 +1310,7 @@ export default function BookPage() {
                               className={`text-xs px-1 py-0.5 rounded font-bold hover:bg-parchment-200 ${note.bold ? "text-amber-600 hover:text-amber-700" : "text-ink-300 hover:text-ink-700"}`}
                               title="Toggle bold">B</button>
                             <button
-                              onClick={() => persist({ ...book, chapters: book.chapters.map((c) => c.id === activeChapter.id ? { ...c, notes: c.notes.map((n) => n.id === note.id ? { ...n, type: isNumbered ? "bullet" : "numbered" } : n) } : c) })}
+                              onClick={() => { const current = bookRef.current; if (current) persist({ ...current, chapters: current.chapters.map((c) => c.id === activeChapter.id ? { ...c, notes: c.notes.map((n) => n.id === note.id ? { ...n, type: isNumbered ? "bullet" : "numbered" } : n) } : c) }); }}
                               className="text-ink-300 hover:text-amber-600 text-xs px-1 py-0.5 rounded hover:bg-parchment-200"
                               title={isNumbered ? "Convert to bullet" : "Convert to numbered"}
                             >{isNumbered ? "•" : "1."}</button>
@@ -1294,6 +1426,8 @@ export default function BookPage() {
                       <button
                         onClick={toggleDictation}
                         title={listening ? "Stop dictation" : "Dictate note"}
+                        aria-label={listening ? "Stop dictation" : "Dictate note"}
+                        aria-pressed={listening}
                         className={`text-sm px-3 py-2.5 rounded-lg transition-colors border ${
                           listening
                             ? "bg-red-500 hover:bg-red-400 text-white border-red-500 animate-pulse"
@@ -1313,7 +1447,7 @@ export default function BookPage() {
                   </button>
                 </div>
                 {(aquaSecondsUsed !== null || autoStopped || aquaCapped) && (
-                  <p className="text-xs mt-1.5 ml-20">
+                  <p className="text-xs mt-1.5 ml-20" aria-live="polite">
                     {aquaSecondsUsed !== null && (
                       <span className="text-ink-300">
                         Aqua HD voice: ${aquaSpendUsd(aquaSecondsUsed).toFixed(2)} of ${AQUA_MONTHLY_CAP_USD}.00 this month
