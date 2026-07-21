@@ -6,6 +6,7 @@ import { useState, useEffect, useRef } from "react";
 import { useRouter, useParams } from "next/navigation";
 import { Book, Chapter, Note, QuizCard } from "@/lib/types";
 import { generateId } from "@/lib/storage";
+import { highlight } from "@/lib/highlight";
 import { useAuth } from "@/context/AuthContext";
 import { useBooks } from "@/context/BooksContext";
 import {
@@ -97,21 +98,6 @@ interface SearchResult {
   noteId?: string;
   noteText?: string;
   matchType: "chapter" | "note";
-}
-
-function highlight(text: string, query: string): React.ReactNode {
-  if (!query.trim()) return text;
-  const idx = text.toLowerCase().indexOf(query.toLowerCase());
-  if (idx === -1) return text;
-  return (
-    <>
-      {text.slice(0, idx)}
-      <mark className="bg-amber-100 text-ink-900 rounded px-0.5">
-        {text.slice(idx, idx + query.length)}
-      </mark>
-      {text.slice(idx + query.length)}
-    </>
-  );
 }
 
 // Turn spoken punctuation words into glyphs, fix spacing, and auto-capitalize.

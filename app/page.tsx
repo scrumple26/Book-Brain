@@ -6,6 +6,7 @@ import { useState, useRef, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { Book, BookStatus, bookStatus } from "@/lib/types";
 import { generateId } from "@/lib/storage";
+import { highlight } from "@/lib/highlight";
 import { useAuth } from "@/context/AuthContext";
 import { useBooks } from "@/context/BooksContext";
 import { parseBooks, toBook, countNotes, type ParsedBook } from "@/lib/importBook";
@@ -271,6 +272,47 @@ export default function Library() {
     return matchesView && matchesSearch && matchesTag;
   });
 
+  // Library-wide note search: the book grid matches title/author/tags only, so
+  // an idea you captured but can't place by book was previously unfindable from
+  // home. Scan every note's text across all books (data's already in memory).
+  const NOTE_RESULT_LIMIT = 50;
+  const q = search.trim().toLowerCase();
+  const noteMatches = q
+    ? books.flatMap((b) =>
+        b.chapters
+          .filter((c) => !c.deleted)
+          .flatMap((c) =>
+            c.notes
+              .filter((n) => n.text.toLowerCase().includes(q))
+              .map((n) => ({ note: n, book: b, chapter: c }))
+          )
+      )
+    : [];
+
+  // "On this day": notes captured on today's month/day in an earlier year.
+  const now = new Date();
+  const mmdd = `${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+  const onThisDay = books
+    .flatMap((b) =>
+      b.chapters
+        .filter((c) => !c.deleted)
+        .flatMap((c) =>
+          c.notes.map((n) => ({ note: n, book: b, chapter: c, when: new Date(n.createdAt) }))
+        )
+    )
+    .filter(
+      ({ when }) =>
+        !isNaN(when.getTime()) &&
+        `${String(when.getMonth() + 1).padStart(2, "0")}-${String(when.getDate()).padStart(2, "0")}` === mmdd &&
+        when.getFullYear() < now.getFullYear()
+    )
+    .sort((a, b) => b.when.getTime() - a.when.getTime());
+
+  function yearsAgo(then: Date): string {
+    const years = now.getFullYear() - then.getFullYear();
+    return years === 1 ? "1 year ago" : `${years} years ago`;
+  }
+
   if (loading) {
     return (
       <div className="min-h-screen bg-parchment-50 flex items-center justify-center">
@@ -357,7 +399,7 @@ export default function Library() {
         <div className="mb-4">
           <input
             type="text"
-            placeholder="Search titles, authors, tags..."
+            placeholder="Search titles, authors, tags, and notes..."
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             className="w-full max-w-md bg-white border border-parchment-300 rounded-lg px-4 py-2.5 text-sm text-ink-900 placeholder-ink-300 focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-transparent"
@@ -383,8 +425,63 @@ export default function Library() {
           </div>
         )}
 
+        {/* Library-wide note search results */}
+        {q && (
+          <div className="mb-8">
+            <p className="text-xs font-medium text-ink-300 uppercase tracking-wide mb-3">
+              🔍 {noteMatches.length} note{noteMatches.length !== 1 ? "s" : ""} matching “{search.trim()}”
+            </p>
+            {noteMatches.length === 0 ? (
+              <p className="text-ink-300 text-sm italic">No notes match — try a different word.</p>
+            ) : (
+              <div className="space-y-2">
+                {noteMatches.slice(0, NOTE_RESULT_LIMIT).map(({ note, book, chapter }) => (
+                  <button
+                    key={note.id}
+                    onClick={() => router.push(`/book/${book.id}`)}
+                    className="block w-full text-left bg-white border border-parchment-200 rounded-lg px-4 py-3 hover:border-amber-500 hover:shadow-sm transition-all"
+                  >
+                    <p className={`text-sm text-ink-800 leading-snug ${note.bold ? "font-bold" : ""}`}>
+                      {highlight(note.text, search.trim())}
+                    </p>
+                    <p className="text-xs text-ink-300 mt-1 italic">
+                      — {book.title}, {chapter.name}
+                    </p>
+                  </button>
+                ))}
+                {noteMatches.length > NOTE_RESULT_LIMIT && (
+                  <p className="text-xs text-ink-300 italic pt-1">
+                    Showing first {NOTE_RESULT_LIMIT} of {noteMatches.length}. Refine your search to narrow it down.
+                  </p>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* On this day: notes captured on today's date in a past year */}
+        {!booksLoading && !q && onThisDay.length > 0 && (
+          <div className="bg-white border border-parchment-200 rounded-xl p-5 mb-8">
+            <p className="text-xs font-medium text-ink-300 uppercase tracking-wide mb-3">📅 On This Day</p>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-3">
+              {onThisDay.slice(0, 6).map(({ note, book, chapter, when }) => (
+                <button
+                  key={note.id}
+                  onClick={() => router.push(`/book/${book.id}`)}
+                  className="block text-left border-l-2 border-amber-300 pl-3 hover:border-amber-500 transition-colors"
+                >
+                  <p className={`text-sm text-ink-800 leading-snug ${note.bold ? "font-bold" : ""}`}>{note.text}</p>
+                  <p className="text-xs text-ink-300 mt-0.5 italic">
+                    — {book.title}, {chapter.name} · {yearsAgo(when)}
+                  </p>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
         {/* ── Features 6 / 7 / 8 — three-column info cards ── */}
-        {!booksLoading && (
+        {!booksLoading && !q && (
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
 
             {/* Feature 6: Random notes */}
@@ -497,6 +594,11 @@ export default function Library() {
             <p className="text-ink-300 text-sm">Loading your library…</p>
           </div>
         ) : filtered.length === 0 ? (
+          q && noteMatches.length > 0 ? (
+            <p className="text-ink-300 text-sm italic pb-8">
+              No book titles match “{search.trim()}” — see the note matches above.
+            </p>
+          ) : (
           <div className="text-center py-24">
             <p className="text-5xl mb-4">{view === "wishlist" ? "🔖" : "📚"}</p>
             <p className="text-ink-500 text-lg font-serif italic">
@@ -520,6 +622,7 @@ export default function Library() {
               </p>
             )}
           </div>
+          )
         ) : (
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
             {filtered.map((book) => {
