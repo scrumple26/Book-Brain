@@ -7,6 +7,7 @@ import { useRouter, useParams } from "next/navigation";
 import { Book, Chapter, Note, QuizCard } from "@/lib/types";
 import { generateId } from "@/lib/storage";
 import { highlight } from "@/lib/highlight";
+import { Grade, isDue, dueSortKey, schedule, newSchedule } from "@/lib/srs";
 import { useAuth } from "@/context/AuthContext";
 import { useBooks } from "@/context/BooksContext";
 import {
@@ -199,10 +200,16 @@ export default function BookPage() {
   const [showDeleted, setShowDeleted] = useState(false);
   const [quizOpen, setQuizOpen] = useState(false);
   const [quizIdx, setQuizIdx] = useState(0);
+  const [reviewIds, setReviewIds] = useState<string[]>([]); // frozen review queue (card ids)
   const [showAnswer, setShowAnswer] = useState(false);
   const [quizMode, setQuizMode] = useState<"review" | "manage">("review");
   const [newQuizQ, setNewQuizQ] = useState("");
   const [newQuizA, setNewQuizA] = useState("");
+  const [newQuizSourceId, setNewQuizSourceId] = useState<string | undefined>(undefined);
+  const [tagEditNoteId, setTagEditNoteId] = useState<string | null>(null);
+  const [tagDraft, setTagDraft] = useState("");
+  const [editingTakeaway, setEditingTakeaway] = useState(false);
+  const [takeawayDraft, setTakeawayDraft] = useState("");
   const [listening, setListening] = useState(false);
   const [awaitingChapterName, setAwaitingChapterName] = useState(false);
   const [dragNoteId, setDragNoteId] = useState<string | null>(null);
@@ -755,9 +762,13 @@ export default function BookPage() {
 
   function openQuiz() {
     if (!book) return;
-    setQuizIdx(0);
     setShowAnswer(false);
-    setQuizMode((book.quizCards?.length ?? 0) > 0 ? "review" : "manage");
+    if ((book.quizCards?.length ?? 0) > 0) {
+      startReview();
+    } else {
+      setQuizIdx(0);
+      setQuizMode("manage");
+    }
     setQuizOpen(true);
   }
 
@@ -767,16 +778,87 @@ export default function BookPage() {
     const question = newQuizQ.trim();
     const answer = newQuizA.trim();
     if (!question || !answer) return;
-    const card: QuizCard = { id: generateId(), question, answer };
+    const card: QuizCard = { id: generateId(), question, answer, sourceNoteId: newQuizSourceId, ...newSchedule() };
     persist({ ...current, quizCards: [...(current.quizCards ?? []), card] });
     setNewQuizQ("");
     setNewQuizA("");
+    setNewQuizSourceId(undefined);
   }
 
   function deleteQuizCard(cardId: string) {
     const current = bookRef.current;
     if (!current) return;
     persist({ ...current, quizCards: (current.quizCards ?? []).filter((c) => c.id !== cardId) });
+  }
+
+  // Freeze a due-first review queue for the session so grading (which changes a
+  // card's due date) doesn't reshuffle the list out from under the user.
+  function startReview() {
+    const cards = bookRef.current?.quizCards ?? [];
+    const ordered = [...cards].sort((a, b) => {
+      const ad = isDue(a) ? 0 : 1;
+      const bd = isDue(b) ? 0 : 1;
+      if (ad !== bd) return ad - bd;
+      return dueSortKey(a).localeCompare(dueSortKey(b));
+    });
+    setReviewIds(ordered.map((c) => c.id));
+    setQuizIdx(0);
+    setShowAnswer(false);
+    setQuizMode("review");
+  }
+
+  // Apply a spaced-repetition grade to a card and reschedule it.
+  function gradeCard(cardId: string, grade: Grade) {
+    const current = bookRef.current;
+    if (!current) return;
+    persist({
+      ...current,
+      quizCards: (current.quizCards ?? []).map((c) => (c.id === cardId ? schedule(c, grade) : c)),
+    });
+  }
+
+  // Promote a note into a flashcard: prefill the note text as the answer and let
+  // the user write the recall cue (the generation effect strengthens memory).
+  function makeFlashcardFromNote(note: Note) {
+    if (listening) stopDictation();
+    setNewQuizSourceId(note.id);
+    setNewQuizA(note.text);
+    setNewQuizQ("");
+    setQuizMode("manage");
+    setQuizOpen(true);
+  }
+
+  // Note-level tags (lowercased, de-duped) for cross-book clustering.
+  function updateNoteTags(chapterId: string, noteId: string, tags: string[]) {
+    const current = bookRef.current;
+    if (!current) return;
+    persist({
+      ...current,
+      chapters: current.chapters.map((c) =>
+        c.id === chapterId
+          ? { ...c, notes: c.notes.map((n) => (n.id === noteId ? { ...n, tags: tags.length ? tags : undefined } : n)) }
+          : c,
+      ),
+    });
+  }
+
+  function addNoteTag(chapterId: string, note: Note, raw: string) {
+    const tag = raw.trim().toLowerCase();
+    if (!tag) return;
+    const existing = note.tags ?? [];
+    if (existing.includes(tag)) return;
+    updateNoteTags(chapterId, note.id, [...existing, tag]);
+  }
+
+  function removeNoteTag(chapterId: string, note: Note, tag: string) {
+    updateNoteTags(chapterId, note.id, (note.tags ?? []).filter((t) => t !== tag));
+  }
+
+  function saveTakeaway() {
+    const current = bookRef.current;
+    if (!current) return;
+    persist({ ...current, takeaway: takeawayDraft.trim() || undefined });
+    setEditingTakeaway(false);
   }
 
   function saveChapterName(chapterId: string) {
@@ -959,6 +1041,48 @@ export default function BookPage() {
 
   const activeChapter = book?.chapters.find((c) => c.id === activeChapterId && !c.deleted);
 
+  // How many of this book's cards are due for review right now.
+  const dueCount = (book?.quizCards ?? []).filter((c) => isDue(c)).length;
+
+  // Tag suggestions for the note currently having its tags edited: this book's
+  // book-level tags plus any tag already used on another note, biased to those
+  // whose word appears in the note's text — cheap keyword auto-suggest.
+  function tagSuggestions(note: Note): string[] {
+    if (!book) return [];
+    const applied = new Set(note.tags ?? []);
+    const pool = new Set<string>(book.tags ?? []);
+    for (const c of book.chapters) for (const n of c.notes) for (const t of n.tags ?? []) pool.add(t);
+    const text = note.text.toLowerCase();
+    return [...pool]
+      .filter((t) => !applied.has(t))
+      .sort((a, b) => Number(text.includes(b)) - Number(text.includes(a)))
+      .slice(0, 6);
+  }
+
+  // #7 related notes across books: notes from OTHER books that share a tag with
+  // this book (book-level or note-level), so ideas cluster across your library.
+  const thisBookTags = new Set<string>([
+    ...(book?.tags ?? []),
+    ...(book?.chapters.flatMap((c) => c.notes.flatMap((n) => n.tags ?? [])) ?? []),
+  ]);
+  const relatedNotes = thisBookTags.size === 0 || !book
+    ? []
+    : books
+        .filter((b) => b.id !== book.id)
+        .flatMap((b) =>
+          b.chapters
+            .filter((c) => !c.deleted)
+            .flatMap((c) =>
+              c.notes
+                .filter((n) => {
+                  const noteTags = new Set([...(n.tags ?? []), ...(b.tags ?? [])]);
+                  return [...noteTags].some((t) => thisBookTags.has(t));
+                })
+                .map((n) => ({ note: n, book: b }))
+            )
+        )
+        .slice(0, 6);
+
   if (authLoading || booksLoading || !book) {
     return (
       <div className="min-h-screen bg-parchment-50 flex items-center justify-center">
@@ -1021,6 +1145,9 @@ export default function BookPage() {
               title="Quiz yourself on this book"
             >
               🎓 Quiz
+              {dueCount > 0 && (
+                <span className="bg-amber-600 text-white text-[10px] font-semibold rounded-full px-1.5 leading-tight">{dueCount}</span>
+              )}
             </button>
           </div>
         </div>
@@ -1182,6 +1309,40 @@ export default function BookPage() {
 
         {/* Main content */}
         <main className="flex-1 flex flex-col min-h-0 overflow-y-auto">
+          {/* Book takeaway — distilled one-line summary (progressive summarization) */}
+          <div className="px-8 pt-4">
+            {editingTakeaway ? (
+              <div className="flex items-start gap-2">
+                <textarea
+                  autoFocus
+                  rows={2}
+                  value={takeawayDraft}
+                  onChange={(e) => setTakeawayDraft(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); saveTakeaway(); }
+                    if (e.key === "Escape") setEditingTakeaway(false);
+                  }}
+                  placeholder="Distill this book to one takeaway…"
+                  className="flex-1 border border-amber-500 rounded-lg px-3 py-2 text-sm text-ink-900 focus:outline-none bg-white resize-y leading-snug"
+                />
+                <button onClick={saveTakeaway} className="bg-amber-600 hover:bg-amber-500 text-white text-xs font-medium px-3 py-2 rounded-lg transition-colors flex-shrink-0">Save</button>
+              </div>
+            ) : book.takeaway ? (
+              <button
+                onClick={() => { setTakeawayDraft(book.takeaway ?? ""); setEditingTakeaway(true); }}
+                className="group w-full text-left flex items-start gap-2 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2"
+              >
+                <span className="text-amber-500 mt-0.5">✦</span>
+                <span className="flex-1 text-sm text-ink-800 italic leading-snug">{book.takeaway}</span>
+                <span className="opacity-0 group-hover:opacity-100 text-ink-300 text-xs flex-shrink-0">✎</span>
+              </button>
+            ) : (
+              <button
+                onClick={() => { setTakeawayDraft(""); setEditingTakeaway(true); }}
+                className="text-xs text-ink-300 hover:text-amber-600 transition-colors"
+              >✦ Add a takeaway</button>
+            )}
+          </div>
           {!activeChapter ? (
             <div className="flex-1 flex items-center justify-center text-center p-8">
               <div>
@@ -1284,7 +1445,42 @@ export default function BookPage() {
                             />
                           </div>
                         ) : (
-                          <span className={`flex-1 text-sm leading-relaxed ${note.bold ? "font-bold text-ink-900" : "text-ink-800"}`}>{note.text}</span>
+                          <div className="flex-1 min-w-0">
+                            <span className={`text-sm leading-relaxed ${note.bold ? "font-bold text-ink-900" : "text-ink-800"}`}>{note.text}</span>
+                            {((note.tags?.length ?? 0) > 0 || tagEditNoteId === note.id) && (
+                              <div className="flex flex-wrap items-center gap-1 mt-1">
+                                {(note.tags ?? []).map((t) => (
+                                  <span key={t} className="inline-flex items-center gap-1 bg-amber-100 text-amber-700 text-[11px] font-medium px-1.5 py-0.5 rounded-full">
+                                    {t}
+                                    <button onClick={() => removeNoteTag(activeChapter.id, note, t)} className="hover:text-amber-900 leading-none">×</button>
+                                  </span>
+                                ))}
+                                {tagEditNoteId === note.id && (
+                                  <>
+                                    <input
+                                      autoFocus
+                                      value={tagDraft}
+                                      onChange={(e) => setTagDraft(e.target.value)}
+                                      onKeyDown={(e) => {
+                                        if (e.key === "Enter" || e.key === ",") { e.preventDefault(); addNoteTag(activeChapter.id, note, tagDraft); setTagDraft(""); }
+                                        if (e.key === "Escape") { setTagEditNoteId(null); setTagDraft(""); }
+                                      }}
+                                      onBlur={() => { addNoteTag(activeChapter.id, note, tagDraft); setTagDraft(""); setTagEditNoteId(null); }}
+                                      placeholder="tag…"
+                                      className="text-[11px] border border-amber-300 rounded-full px-2 py-0.5 w-20 focus:outline-none focus:ring-1 focus:ring-amber-500"
+                                    />
+                                    {tagSuggestions(note).map((s) => (
+                                      <button
+                                        key={s}
+                                        onMouseDown={(e) => { e.preventDefault(); addNoteTag(activeChapter.id, note, s); }}
+                                        className="text-[11px] text-ink-400 hover:text-amber-600 border border-dashed border-parchment-300 rounded-full px-1.5 py-0.5"
+                                      >+ {s}</button>
+                                    ))}
+                                  </>
+                                )}
+                              </div>
+                            )}
+                          </div>
                         )}
                         {editingNoteId !== note.id && (
                           <div className="flex gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0 mt-0.5">
@@ -1300,6 +1496,12 @@ export default function BookPage() {
                               className="text-ink-300 hover:text-amber-600 text-xs px-1 py-0.5 rounded hover:bg-parchment-200"
                               title={isNumbered ? "Convert to bullet" : "Convert to numbered"}
                             >{isNumbered ? "•" : "1."}</button>
+                            <button onClick={() => { setTagEditNoteId(tagEditNoteId === note.id ? null : note.id); setTagDraft(""); }}
+                              className={`text-xs px-1 py-0.5 rounded hover:bg-parchment-200 ${(note.tags?.length ?? 0) > 0 ? "text-amber-600" : "text-ink-300 hover:text-ink-700"}`}
+                              title="Tags">🏷</button>
+                            <button onClick={() => makeFlashcardFromNote(note)}
+                              className="text-xs px-1 py-0.5 rounded hover:bg-parchment-200 text-ink-300 hover:text-amber-600"
+                              title="Make flashcard">❓</button>
                             <button onClick={() => { if (listening) stopDictation(); setEditingNoteId(note.id); setEditingNoteText(note.text); setEditingNoteIndent(level); setEditingNoteType(note.type ?? "bullet"); setEditingNoteBold(note.bold ?? false); }}
                               className="text-ink-300 hover:text-ink-700 text-xs p-0.5">✎</button>
                             <button onClick={() => deleteNote(activeChapter.id, note.id)}
@@ -1333,6 +1535,25 @@ export default function BookPage() {
                     </div>
                   );
                 })()}
+
+                {/* #7 Related notes from other books sharing a tag */}
+                {relatedNotes.length > 0 && (
+                  <div className="mt-8 pt-5 border-t border-parchment-200">
+                    <p className="text-xs font-medium text-ink-300 uppercase tracking-wide mb-3">🔗 Related across your library</p>
+                    <div className="space-y-2">
+                      {relatedNotes.map(({ note, book: rb }) => (
+                        <button
+                          key={note.id}
+                          onClick={() => router.push(`/book/${rb.id}`)}
+                          className="block w-full text-left bg-parchment-50 border border-parchment-200 rounded-lg px-3 py-2 hover:border-amber-500 transition-colors"
+                        >
+                          <p className={`text-sm text-ink-800 leading-snug ${note.bold ? "font-bold" : ""}`}>{note.text}</p>
+                          <p className="text-xs text-ink-300 mt-0.5 italic">— {rb.title}</p>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </div>
 
               {/* Note input */}
@@ -1458,14 +1679,13 @@ export default function BookPage() {
       {/* Quiz modal — manual flashcards */}
       {quizOpen && book && (() => {
         const cards = book.quizCards ?? [];
-        const card = cards[quizIdx];
         return (
           <div className="fixed inset-0 bg-ink-900/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
             <div className="bg-white rounded-2xl shadow-xl w-full max-w-lg p-6 flex flex-col gap-4 max-h-[90vh] overflow-y-auto">
               <div className="flex items-center justify-between gap-2">
                 <div className="flex items-center gap-1 bg-parchment-100 rounded-lg p-0.5">
                   <button
-                    onClick={() => { setQuizMode("review"); setQuizIdx(0); setShowAnswer(false); }}
+                    onClick={startReview}
                     className={`text-xs font-medium px-3 py-1 rounded-md transition-colors ${quizMode === "review" ? "bg-white text-ink-900 shadow-sm" : "text-ink-400 hover:text-ink-700"}`}
                   >🎓 Review</button>
                   <button
@@ -1476,36 +1696,59 @@ export default function BookPage() {
                 <button onClick={() => setQuizOpen(false)} className="text-ink-300 hover:text-ink-700 text-lg leading-none">×</button>
               </div>
 
-              {quizMode === "review" ? (
-                cards.length === 0 ? (
-                  <div className="text-center py-8">
-                    <p className="text-ink-400 text-sm italic mb-3">No quiz cards yet.</p>
-                    <button onClick={() => setQuizMode("manage")} className="bg-amber-600 hover:bg-amber-500 text-white text-sm font-medium px-4 py-2 rounded-lg transition-colors">Add cards</button>
-                  </div>
-                ) : (
+              {quizMode === "review" ? (() => {
+                const queue = reviewIds.map((id) => cards.find((c) => c.id === id)).filter(Boolean) as QuizCard[];
+                const reviewCard = queue[quizIdx];
+                if (cards.length === 0) {
+                  return (
+                    <div className="text-center py-8">
+                      <p className="text-ink-400 text-sm italic mb-3">No quiz cards yet.</p>
+                      <button onClick={() => setQuizMode("manage")} className="bg-amber-600 hover:bg-amber-500 text-white text-sm font-medium px-4 py-2 rounded-lg transition-colors">Add cards</button>
+                    </div>
+                  );
+                }
+                if (!reviewCard) {
+                  return (
+                    <div className="text-center py-8">
+                      <p className="text-3xl mb-2">🎉</p>
+                      <p className="text-ink-500 text-sm mb-4">
+                        Review complete{queue.length > 0 ? ` — ${queue.length} card${queue.length !== 1 ? "s" : ""} done` : ""}.
+                      </p>
+                      <button onClick={startReview} className="border border-parchment-300 text-ink-600 text-sm font-medium px-4 py-2 rounded-lg hover:bg-parchment-100 transition-colors">Review again</button>
+                    </div>
+                  );
+                }
+                return (
                   <>
-                    <span className="text-xs font-medium text-ink-300 uppercase tracking-wide">Card {quizIdx + 1} of {cards.length}</span>
-                    <p className="font-serif text-ink-900 text-lg leading-snug">{card.question}</p>
+                    <span className="text-xs font-medium text-ink-300 uppercase tracking-wide">
+                      Card {quizIdx + 1} of {queue.length}{dueCount > 0 ? ` · ${dueCount} due` : ""}
+                    </span>
+                    <p className="font-serif text-ink-900 text-lg leading-snug">{reviewCard.question}</p>
                     {showAnswer ? (
-                      <div className="bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 text-sm text-ink-800 whitespace-pre-wrap">{card.answer}</div>
+                      <>
+                        <div className="bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 text-sm text-ink-800 whitespace-pre-wrap">{reviewCard.answer}</div>
+                        <div className="grid grid-cols-4 gap-2 mt-2">
+                          {([
+                            ["again", "Again", "text-red-600 border-red-200 hover:bg-red-50"],
+                            ["hard", "Hard", "text-amber-700 border-amber-200 hover:bg-amber-50"],
+                            ["good", "Good", "text-green-700 border-green-200 hover:bg-green-50"],
+                            ["easy", "Easy", "text-blue-700 border-blue-200 hover:bg-blue-50"],
+                          ] as const).map(([g, label, cls]) => (
+                            <button
+                              key={g}
+                              onClick={() => { gradeCard(reviewCard.id, g); setShowAnswer(false); setQuizIdx((i) => i + 1); }}
+                              className={`text-xs font-medium py-2 rounded-lg border bg-white transition-colors ${cls}`}
+                            >{label}</button>
+                          ))}
+                        </div>
+                      </>
                     ) : (
                       <button onClick={() => setShowAnswer(true)} className="bg-amber-600 hover:bg-amber-500 text-white text-sm font-medium px-4 py-2.5 rounded-lg transition-colors">Reveal Answer</button>
                     )}
-                    <div className="flex gap-2 mt-2">
-                      <button
-                        onClick={() => { setQuizIdx((i) => Math.max(0, i - 1)); setShowAnswer(false); }}
-                        disabled={quizIdx === 0}
-                        className="flex-1 border border-parchment-300 text-ink-500 text-sm font-medium py-2 rounded-lg hover:bg-parchment-100 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-                      >← Prev</button>
-                      <button
-                        onClick={() => { setQuizIdx((i) => Math.min(cards.length - 1, i + 1)); setShowAnswer(false); }}
-                        disabled={quizIdx === cards.length - 1}
-                        className="flex-1 border border-parchment-300 text-ink-500 text-sm font-medium py-2 rounded-lg hover:bg-parchment-100 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-                      >Next →</button>
-                    </div>
+                    <button onClick={() => { setShowAnswer(false); setQuizIdx((i) => i + 1); }} className="text-xs text-ink-300 hover:text-ink-600 mt-1 self-start">Skip →</button>
                   </>
-                )
-              ) : (
+                );
+              })() : (
                 <>
                   <div className="space-y-2">
                     <input

@@ -4,6 +4,7 @@ export interface Note {
   indent: number;   // 0 | 1 | 2
   type?: "bullet" | "numbered";
   bold?: boolean;
+  tags?: string[];  // note-level tags for cross-book clustering
   createdAt: string;
 }
 
@@ -24,6 +25,12 @@ export interface QuizCard {
   id: string;
   question: string;
   answer: string;
+  sourceNoteId?: string; // if promoted from a note
+  // SM-2-lite spaced-repetition scheduling (all optional — older cards are "due").
+  dueDate?: string;       // YYYY-MM-DD; absent = due now
+  intervalDays?: number;  // current spacing interval
+  easeFactor?: number;    // difficulty multiplier, min 1.3
+  lastReviewedAt?: string; // ISO timestamp
 }
 
 export type BookStatus = "wishlist" | "reading" | "completed";
@@ -34,6 +41,7 @@ export interface Book {
   author: string;
   tags: string[];
   status?: BookStatus; // absent on older books — derive with bookStatus()
+  takeaway?: string;   // distilled one-line summary (progressive summarization)
   dateCompleted?: string; // ISO date string YYYY-MM-DD
   createdAt: string;
   chapters: Chapter[];
