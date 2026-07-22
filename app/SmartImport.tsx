@@ -10,6 +10,7 @@ import {
   type SmartImportQuestion,
 } from "@/lib/smartImport";
 import { countNotes, toBook, type ParsedBook } from "@/lib/importBook";
+import { readJson } from "@/lib/apiResponse";
 
 
 /**
@@ -47,18 +48,23 @@ export function SmartImport({ onDone }: { onDone?: () => void } = {}) {
         headers: { Authorization: `Bearer ${token}`, "content-type": "application/json" },
         body: JSON.stringify({ document, answers, round: nextRound }),
       });
-      const body = await res.json();
-      if (!res.ok) {
-        setError(body?.error ?? `Request failed (${res.status})`);
+      const parsed = await readJson<{
+        status: "questions" | "parsed";
+        questions?: SmartImportQuestion[];
+        book?: ParsedBook;
+        assumptions?: string[];
+      }>(res);
+      if (!parsed.ok || !parsed.data) {
+        setError(parsed.error);
         return;
       }
       setRound(nextRound);
-      if (body.status === "questions") {
-        setQuestions(body.questions as SmartImportQuestion[]);
+      if (parsed.data.status === "questions") {
+        setQuestions(parsed.data.questions ?? []);
         setPreview(null);
       } else {
         setQuestions(null);
-        setPreview({ book: body.book as ParsedBook, assumptions: body.assumptions ?? [] });
+        setPreview({ book: parsed.data.book as ParsedBook, assumptions: parsed.data.assumptions ?? [] });
       }
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));

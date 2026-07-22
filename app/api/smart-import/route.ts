@@ -19,7 +19,10 @@ import {
   type SmartImportAnswer,
 } from "@/lib/smartImport";
 
-export const runtime = "edge";
+export const runtime = "nodejs";
+// An LLM call can run far longer than the edge runtime allows to respond, and
+// blowing that limit returns the platform error page instead of our JSON.
+export const maxDuration = 60;
 
 const ANTHROPIC_URL = "https://api.anthropic.com/v1/messages";
 const ANTHROPIC_VERSION = "2023-06-01";

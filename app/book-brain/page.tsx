@@ -16,6 +16,7 @@ import {
   type LensMatch,
 } from "@/lib/lens";
 import type { AskCitation } from "@/lib/askPrompt";
+import { readJson } from "@/lib/apiResponse";
 import { estimateCostUsd } from "@/lib/ai";
 import { QUIZ_MAX_OUTPUT_TOKENS } from "@/lib/quizPrompt";
 import { QuizGenerator } from "@/app/BookQuizGenerator";
@@ -239,12 +240,16 @@ function Asker({
           })),
         }),
       });
-      const body = await res.json();
-      if (!res.ok) {
-        setError(body?.error ?? `Request failed (${res.status})`);
+      const parsed = await readJson<{
+        answer: string;
+        citations: AskCitation[];
+        cachedTokens: number;
+      }>(res);
+      if (!parsed.ok || !parsed.data) {
+        setError(parsed.error);
         return;
       }
-      setResult({ answer: body.answer, citations: body.citations, cachedTokens: body.cachedTokens });
+      setResult(parsed.data);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {

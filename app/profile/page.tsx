@@ -11,6 +11,7 @@ import {
   fetchAquaSecondsUsed,
 } from "@/lib/aqua";
 import { AI_MONTHLY_CAP_USD, aiUsageFraction } from "@/lib/ai";
+import { readJson } from "@/lib/apiResponse";
 
 type Loadable<T> = { state: "loading" } | { state: "error"; message: string } | { state: "ok"; value: T };
 
@@ -81,13 +82,13 @@ export default function ProfilePage() {
       try {
         const token = await user.getIdToken();
         const res = await fetch("/api/ai-usage", { headers: { Authorization: `Bearer ${token}` } });
-        const body = await res.json();
+        const parsed = await readJson<{ spendUsd: number; capUsd: number }>(res);
         if (cancelled) return;
-        if (!res.ok) {
-          setAi({ state: "error", message: body?.error ?? `Request failed (${res.status})` });
+        if (!parsed.ok || !parsed.data) {
+          setAi({ state: "error", message: parsed.error ?? "Unknown error" });
           return;
         }
-        setAi({ state: "ok", value: { spendUsd: body.spendUsd, capUsd: body.capUsd } });
+        setAi({ state: "ok", value: parsed.data });
       } catch (err) {
         if (!cancelled) setAi({ state: "error", message: err instanceof Error ? err.message : String(err) });
       }

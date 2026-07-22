@@ -4,6 +4,7 @@ import { useState } from "react";
 import { useAuth } from "@/context/AuthContext";
 import { useBooks } from "@/context/BooksContext";
 import { type QuizDraft } from "@/lib/quizPrompt";
+import { readJson } from "@/lib/apiResponse";
 import { generateId } from "@/lib/storage";
 import type { QuizCard } from "@/lib/types";
 
@@ -47,13 +48,13 @@ export function QuizGenerator({ bookId }: { bookId: string }) {
         headers: { Authorization: `Bearer ${token}`, "content-type": "application/json" },
         body: JSON.stringify({ title: book.title, author: book.author, notes: sourceNotes }),
       });
-      const body = await res.json();
-      if (!res.ok) {
-        setError(body?.error ?? `Request failed (${res.status})`);
+      const result = await readJson<{ cards: QuizDraft[] }>(res);
+      if (!result.ok || !result.data) {
+        setError(result.error);
         return;
       }
-      setDrafts(body.cards as QuizDraft[]);
-      setKept(new Set((body.cards as QuizDraft[]).map((_, i) => i)));
+      setDrafts(result.data.cards);
+      setKept(new Set(result.data.cards.map((_, i) => i)));
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {

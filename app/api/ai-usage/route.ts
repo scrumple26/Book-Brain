@@ -3,7 +3,10 @@ import { guardAiRoute } from "@/lib/aiRouteGuard";
 import { AI_HARD_STOP_USD, AI_MONTHLY_CAP_USD, aiMonthKey } from "@/lib/ai";
 import { AiUsageUnavailableError, fetchAiSpendUsed } from "@/lib/aiUsage";
 
-export const runtime = "edge";
+export const runtime = "nodejs";
+// Same runtime as the other AI routes so the service-account token path has
+// one behaviour to reason about rather than two.
+export const maxDuration = 30;
 
 /**
  * Read the shared AI budget, for the profile page's progress bar.
