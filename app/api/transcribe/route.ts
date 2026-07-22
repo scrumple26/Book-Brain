@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { verifyIdToken } from "@/lib/verifyIdToken";
 
 export const runtime = "edge";
 
@@ -11,10 +12,52 @@ const MODEL = "avalon-v1.5";
 // under 1 MB. Anything bigger than 2 MB is not a legitimate utterance clip.
 const MAX_BYTES = 2_000_000;
 
+/**
+ * Callers allowed to spend Aqua credit, as Firebase uids (comma-separated in
+ * AQUA_ALLOWED_UIDS). Google sign-in accepts ANY Google account, so without
+ * this list every stranger who signs in can bill audio to this key — the list
+ * is what makes the endpoint personal rather than merely non-anonymous.
+ */
+function allowedUids(): string[] {
+  return (process.env.AQUA_ALLOWED_UIDS ?? "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
 export async function POST(req: NextRequest) {
   const apiKey = process.env.AQUA_API_KEY;
   if (!apiKey) {
     return NextResponse.json({ error: "AQUA_API_KEY not set" }, { status: 501 });
+  }
+
+  // Spending money requires proving you are a signed-in user of this project.
+  const projectId = process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID;
+  if (!projectId) {
+    return NextResponse.json(
+      { error: "NEXT_PUBLIC_FIREBASE_PROJECT_ID not set — cannot verify callers" },
+      { status: 501 },
+    );
+  }
+
+  const bearer = req.headers.get("authorization") ?? "";
+  const token = bearer.toLowerCase().startsWith("bearer ") ? bearer.slice(7).trim() : "";
+  if (!token) {
+    return NextResponse.json({ error: "Sign-in required" }, { status: 401 });
+  }
+
+  let user;
+  try {
+    user = await verifyIdToken(token, projectId);
+  } catch (e) {
+    console.warn("transcribe: rejected token —", e instanceof Error ? e.message : e);
+    return NextResponse.json({ error: "Sign-in required" }, { status: 401 });
+  }
+
+  const allowed = allowedUids();
+  if (allowed.length > 0 && !allowed.includes(user.uid)) {
+    console.warn(`transcribe: uid ${user.uid} is not on AQUA_ALLOWED_UIDS`);
+    return NextResponse.json({ error: "Not permitted to use dictation" }, { status: 403 });
   }
 
   const form = await req.formData().catch(() => null);

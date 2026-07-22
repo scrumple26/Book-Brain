@@ -335,8 +335,9 @@ export default function BookPage() {
   }
 
   async function transcribeUtterance(blob: Blob, durationSec: number, seg: DictSeg) {
-    const uid = user?.uid;
-    if (!uid || !aquaReadyRef.current) return;
+    // narrow `user` itself, not just the uid — the fetch below needs its token
+    if (!user || !aquaReadyRef.current) return;
+    const uid = user.uid;
     // HARD BUDGET: refuse any clip that could cross the safety threshold.
     if (aquaSecondsRef.current + durationSec > AQUA_MAX_SECONDS_PER_MONTH) {
       aquaSessionRef.current = false;
@@ -360,9 +361,18 @@ export default function BookPage() {
     try {
       const fd = new FormData();
       fd.append("audio", blob, "utterance.webm");
-      const res = await fetch("/api/transcribe", { method: "POST", body: fd });
+      // The route bills real money, so it only accepts verified callers.
+      // getIdToken() refreshes a near-expired token on its own.
+      const idToken = await user.getIdToken();
+      const res = await fetch("/api/transcribe", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${idToken}` },
+        body: fd,
+      });
       if (!res.ok) {
-        if (res.status === 501) aquaSessionRef.current = false; // AQUA_API_KEY not configured
+        // 501 = key not configured, 403 = this account isn't allowed to spend.
+        // Both are settled facts for the session — stop retrying every clip.
+        if (res.status === 501 || res.status === 403) aquaSessionRef.current = false;
         return; // keep the Web Speech text
       }
       const data = await res.json();
