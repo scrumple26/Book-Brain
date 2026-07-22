@@ -15,9 +15,19 @@ import { parseBooks, toBook, countNotes, type ParsedBook } from "@/lib/importBoo
 import { useCapabilities } from "@/lib/useCapabilities";
 import { SmartImport } from "@/app/SmartImport";
 import { ReadingLogTab } from "@/app/ReadingLogTab";
+import { QuizTab } from "@/app/QuizTab";
+
+/** One shape for every nav control — same height, padding, and active state. */
+const tabClass = (active: boolean) =>
+  [
+    "inline-flex items-center h-9 px-3.5 rounded-lg border text-sm font-medium transition-colors",
+    active
+      ? "bg-amber-600 text-white border-amber-600"
+      : "bg-white text-ink-500 border-parchment-300 hover:border-amber-500 hover:text-amber-600",
+  ].join(" ");
 
 type ShelfView = "library" | "reading" | "wishlist" | "completed";
-type MainTab = "books" | "wishlist" | "dashboard" | "log";
+type MainTab = "books" | "wishlist" | "quiz" | "dashboard" | "log";
 
 function SignInScreen({ onSignIn, error }: { onSignIn: () => void; error: string | null }) {
   return (
@@ -442,63 +452,48 @@ export default function Library() {
           </div>
         )}
 
-        {/* Primary navigation. Books carries the shelf dropdown; everything
-            else is a peer tab so no section is buried a level down. */}
+        {/* Primary navigation. One row, one shape: Books is itself the shelf
+            dropdown rather than a button welded to a select, so every item is
+            the same control at the same height with the same active state. */}
         <div className="flex flex-wrap items-center gap-1.5 mb-5 border-b border-parchment-300 pb-3">
-          <div className="flex items-center">
-            <button
-              onClick={() => setTab("books")}
-              className={`text-sm font-medium pl-3.5 pr-2 py-1.5 rounded-l-lg border transition-colors ${
-                tab === "books"
-                  ? "bg-amber-600 text-white border-amber-600"
-                  : "bg-white text-ink-500 border-parchment-300 hover:border-amber-500 hover:text-amber-600"
-              }`}
-            >
-              📚 Books <span className={tab === "books" ? "text-amber-100" : "text-ink-300"}>{shelfCounts[view]}</span>
-            </button>
+          <div className="relative">
             <select
               value={view}
-              onChange={(e) => {
-                setView(e.target.value as ShelfView);
-                setTab("books");
-              }}
-              aria-label="Shelf"
-              className={`text-sm font-medium py-1.5 pl-2 pr-7 rounded-r-lg border border-l-0 cursor-pointer transition-colors ${
-                tab === "books"
-                  ? "bg-amber-600 text-white border-amber-600"
-                  : "bg-white text-ink-500 border-parchment-300"
+              aria-label="Books shelf"
+              // mousedown lands before the menu opens, so clicking the control
+              // switches to Books even when you then pick the shelf you were on.
+              onMouseDown={() => setTab("books")}
+              onChange={(e) => { setView(e.target.value as ShelfView); setTab("books"); }}
+              className={`${tabClass(tab === "books")} pr-7 appearance-none cursor-pointer`}
+            >
+              <option value="library">Books · Library ({shelfCounts.library})</option>
+              <option value="reading">Books · Reading ({shelfCounts.reading})</option>
+              <option value="completed">Books · Completed ({shelfCounts.completed})</option>
+            </select>
+            <span
+              aria-hidden
+              className={`pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-[0.6rem] ${
+                tab === "books" ? "text-amber-100" : "text-ink-300"
               }`}
             >
-              <option value="library">Library</option>
-              <option value="reading">Reading</option>
-              <option value="completed">Completed</option>
-            </select>
+              ▼
+            </span>
           </div>
 
           {([
-            ["wishlist", `🔖 Wishlist ${shelfCounts.wishlist}`],
-            ["dashboard", "📊 Dashboard"],
-            ["log", "📖 Reading Log"],
+            ["wishlist", `Wishlist (${shelfCounts.wishlist})`],
+            ["quiz", dueCards.length > 0 ? `Quiz (${dueCards.length} due)` : "Quiz"],
+            ["dashboard", "Dashboard"],
+            ["log", "Reading Log"],
           ] as const).map(([key, label]) => (
-            <button
-              key={key}
-              onClick={() => setTab(key)}
-              className={`text-sm font-medium px-3.5 py-1.5 rounded-lg border transition-colors ${
-                tab === key
-                  ? "bg-amber-600 text-white border-amber-600"
-                  : "bg-white text-ink-500 border-parchment-300 hover:border-amber-500 hover:text-amber-600"
-              }`}
-            >
+            <button key={key} onClick={() => setTab(key)} className={tabClass(tab === key)}>
               {label}
             </button>
           ))}
 
           {capabilities.has("hub") && (
-            <Link
-              href="/book-brain"
-              className="text-sm font-medium px-3.5 py-1.5 rounded-lg border bg-white text-ink-500 border-parchment-300 hover:border-amber-500 hover:text-amber-600 transition-colors"
-            >
-              🧠 Book Brain
+            <Link href="/book-brain" className={tabClass(false)}>
+              Book Brain
             </Link>
           )}
         </div>
@@ -575,7 +570,7 @@ export default function Library() {
         )}
 
         {/* #6 Due for review — interleaved across all books */}
-        {tab === "dashboard" && !booksLoading && dueCards.length > 0 && (
+        {tab === "quiz" && !booksLoading && dueCards.length > 0 && (
           <div className="flex items-center justify-between gap-4 bg-amber-600 text-white rounded-xl px-5 py-4 mb-8">
             <div className="min-w-0">
               <p className="text-sm font-semibold">🎯 {dueCards.length} card{dueCards.length !== 1 ? "s" : ""} due for review</p>
@@ -589,6 +584,18 @@ export default function Library() {
             </button>
           </div>
         )}
+
+        {tab === "quiz" && !booksLoading && dueCards.length === 0 && (
+          <div className="bg-white border border-parchment-200 rounded-xl p-5 mb-4">
+            <p className="text-sm text-ink-700">Nothing due for review right now.</p>
+            <p className="text-xs text-ink-300 mt-0.5">
+              Cards come back on an expanding schedule — the better you recall one, the longer
+              until you see it again.
+            </p>
+          </div>
+        )}
+
+        {tab === "quiz" && !booksLoading && <QuizTab />}
 
         {/* On this day: notes captured on today's date in a past year */}
         {tab === "dashboard" && !booksLoading && onThisDay.length > 0 && (

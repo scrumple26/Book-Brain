@@ -19,15 +19,8 @@ import type { AskCitation } from "@/lib/askPrompt";
 import { readJson } from "@/lib/apiResponse";
 import { estimateCostUsd } from "@/lib/ai";
 import { QUIZ_MAX_OUTPUT_TOKENS } from "@/lib/quizPrompt";
-import { QuizGenerator } from "@/app/BookQuizGenerator";
 
 type LensKind = Lens["type"];
-type HubTab = "ask" | "quiz";
-
-const TAB_LABELS: Record<HubTab, string> = {
-  ask: "Ask your notes",
-  quiz: "Quiz cards",
-};
 
 const KIND_LABELS: Record<LensKind, string> = {
   book: "A book",
@@ -50,7 +43,6 @@ export default function BookBrainPage() {
   const { books, loading: booksLoading } = useBooks();
   const capabilities = useCapabilities();
 
-  const [tab, setTab] = useState<HubTab>("ask");
   const [kind, setKind] = useState<LensKind>("all");
   const [bookId, setBookId] = useState("");
   const [tag, setTag] = useState("");
@@ -101,27 +93,6 @@ export default function BookBrainPage() {
     <div className="min-h-screen bg-parchment-50">
       <Header />
       <main className="max-w-3xl mx-auto px-6 py-8">
-        <div className="flex flex-wrap gap-1.5 mb-6 border-b border-parchment-300 pb-3">
-          {(Object.keys(TAB_LABELS) as HubTab[])
-            .map((t) => (
-              <button
-                key={t}
-                onClick={() => setTab(t)}
-                className={`text-sm font-medium px-3 py-1.5 rounded-lg transition-colors ${
-                  tab === t
-                    ? "bg-amber-600 text-white"
-                    : "text-ink-500 hover:bg-amber-50 hover:text-amber-600"
-                }`}
-              >
-                {TAB_LABELS[t]}
-              </button>
-            ))}
-        </div>
-
-        {tab === "quiz" && <QuizTab />}
-
-        {tab === "ask" && (
-          <>
         <p className="text-ink-500 mb-6">
           Choose a lens — the set of notes a question is allowed to read — then ask.
         </p>
@@ -182,8 +153,6 @@ export default function BookBrainPage() {
         </div>
 
         <Asker lens={lens} matches={matches} disabled={allLocked} />
-          </>
-        )}
       </main>
     </div>
   );
@@ -321,35 +290,6 @@ function Asker({
         </div>
       )}
     </div>
-  );
-}
-
-/** Quiz generation is per-book, so this tab picks a book rather than a lens. */
-function QuizTab() {
-  const { books } = useBooks();
-  const [bookId, setBookId] = useState("");
-  const selected = bookId || books[0]?.id || "";
-
-  if (books.length === 0) {
-    return (
-      <p className="text-ink-500 text-sm">
-        Add a book first — quiz cards are generated from a book&apos;s own notes.
-      </p>
-    );
-  }
-
-  return (
-    <>
-      <div className="bg-white border border-parchment-200 rounded-xl p-5 mb-4">
-        <label className="block text-sm text-ink-700 mb-2">Book</label>
-        <LensSelect value={selected} onChange={setBookId} empty="No books yet">
-          {books.map((b) => (
-            <option key={b.id} value={b.id}>{b.title}</option>
-          ))}
-        </LensSelect>
-      </div>
-      <QuizGenerator bookId={selected} />
-    </>
   );
 }
 
