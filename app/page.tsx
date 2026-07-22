@@ -14,6 +14,10 @@ import { useBooks } from "@/context/BooksContext";
 import { parseBooks, toBook, countNotes, type ParsedBook } from "@/lib/importBook";
 import { useCapabilities } from "@/lib/useCapabilities";
 import { SmartImport } from "@/app/SmartImport";
+import { ReadingLogTab } from "@/app/ReadingLogTab";
+
+type ShelfView = "library" | "reading" | "wishlist" | "completed";
+type MainTab = "books" | "wishlist" | "dashboard" | "log";
 
 function SignInScreen({ onSignIn, error }: { onSignIn: () => void; error: string | null }) {
   return (
@@ -107,7 +111,8 @@ export default function Library() {
   const [search, setSearch] = useState("");
   const [activeTag, setActiveTag] = useState<string | null>(null);
   // Which shelf is showing. "library" = everything you own (reading + completed).
-  const [view, setView] = useState<"library" | "reading" | "wishlist" | "completed">("library");
+  const [view, setView] = useState<ShelfView>("library");
+  const [tab, setTab] = useState<MainTab>("books");
   // #6 cross-book interleaved spaced-repetition review.
   const [reviewOpen, setReviewOpen] = useState(false);
   const [reviewQueue, setReviewQueue] = useState<{ bookId: string; card: QuizCard }[]>([]);
@@ -143,11 +148,8 @@ export default function Library() {
     }
   }
 
-  // Feature 7: Reading log
+  // Today, for defaulting a completion date when a book is shelved as done.
   const todayStr = new Date().toISOString().split("T")[0];
-  const [logDate, setLogDate] = useState(todayStr);
-  const [logPages, setLogPages] = useState("");
-  const [logBookId, setLogBookId] = useState("");
 
   // Feature 6: Resurfaced notes — weighted pick, refreshed after books load.
   const [randomNotes, setRandomNotes] = useState<{ text: string; bookTitle: string; chapterName: string; bold: boolean }[]>([]);
@@ -248,18 +250,6 @@ export default function Library() {
   }
 
   // Feature 7: Reading log submit
-  async function addReadingLogEntry() {
-    if (!logBookId || !logPages || !logDate) return;
-    const pages = parseInt(logPages, 10);
-    if (isNaN(pages) || pages <= 0) return;
-    const targetBook = books.find((b) => b.id === logBookId);
-    if (!targetBook) return;
-    const entry = { date: logDate, pages };
-    const updated: Book = { ...targetBook, readingLog: [...(targetBook.readingLog ?? []), entry] };
-    setLogPages("");
-    await upsertBook(updated);
-  }
-
   // Feature 7: Stats derived from readingLog
   const currentYear = new Date().getFullYear().toString();
   const currentMonth = new Date().toISOString().slice(0, 7); // YYYY-MM
@@ -296,10 +286,12 @@ export default function Library() {
     completed: books.filter((b) => bookStatus(b) === "completed").length,
   };
 
+  // The Wishlist tab pins its own shelf; otherwise the Books dropdown decides.
+  const shelf: ShelfView = tab === "wishlist" ? "wishlist" : view;
   const filtered = books.filter((b) => {
     const status = bookStatus(b);
     const matchesView =
-      view === "library" ? status !== "wishlist" : status === view;
+      shelf === "library" ? status !== "wishlist" : status === shelf;
     const matchesSearch =
       !search ||
       b.title.toLowerCase().includes(search.toLowerCase()) ||
@@ -450,29 +442,71 @@ export default function Library() {
           </div>
         )}
 
-        {/* Shelf tabs */}
-        <div className="flex flex-wrap gap-1.5 mb-4">
-          {([
-            ["library", "📚 Library", shelfCounts.library],
-            ["reading", "📖 Reading", shelfCounts.reading],
-            ["wishlist", "🔖 Wishlist", shelfCounts.wishlist],
-            ["completed", "✓ Completed", shelfCounts.completed],
-          ] as const).map(([key, label, count]) => (
+        {/* Primary navigation. Books carries the shelf dropdown; everything
+            else is a peer tab so no section is buried a level down. */}
+        <div className="flex flex-wrap items-center gap-1.5 mb-5 border-b border-parchment-300 pb-3">
+          <div className="flex items-center">
             <button
-              key={key}
-              onClick={() => setView(key)}
-              className={`text-sm font-medium px-3.5 py-1.5 rounded-lg border transition-colors ${
-                view === key
+              onClick={() => setTab("books")}
+              className={`text-sm font-medium pl-3.5 pr-2 py-1.5 rounded-l-lg border transition-colors ${
+                tab === "books"
                   ? "bg-amber-600 text-white border-amber-600"
                   : "bg-white text-ink-500 border-parchment-300 hover:border-amber-500 hover:text-amber-600"
               }`}
             >
-              {label}{" "}
-              <span className={view === key ? "text-amber-100" : "text-ink-300"}>{count}</span>
+              📚 Books <span className={tab === "books" ? "text-amber-100" : "text-ink-300"}>{shelfCounts[view]}</span>
+            </button>
+            <select
+              value={view}
+              onChange={(e) => {
+                setView(e.target.value as ShelfView);
+                setTab("books");
+              }}
+              aria-label="Shelf"
+              className={`text-sm font-medium py-1.5 pl-2 pr-7 rounded-r-lg border border-l-0 cursor-pointer transition-colors ${
+                tab === "books"
+                  ? "bg-amber-600 text-white border-amber-600"
+                  : "bg-white text-ink-500 border-parchment-300"
+              }`}
+            >
+              <option value="library">Library</option>
+              <option value="reading">Reading</option>
+              <option value="completed">Completed</option>
+            </select>
+          </div>
+
+          {([
+            ["wishlist", `🔖 Wishlist ${shelfCounts.wishlist}`],
+            ["dashboard", "📊 Dashboard"],
+            ["log", "📖 Reading Log"],
+          ] as const).map(([key, label]) => (
+            <button
+              key={key}
+              onClick={() => setTab(key)}
+              className={`text-sm font-medium px-3.5 py-1.5 rounded-lg border transition-colors ${
+                tab === key
+                  ? "bg-amber-600 text-white border-amber-600"
+                  : "bg-white text-ink-500 border-parchment-300 hover:border-amber-500 hover:text-amber-600"
+              }`}
+            >
+              {label}
             </button>
           ))}
+
+          {capabilities.has("hub") && (
+            <Link
+              href="/book-brain"
+              className="text-sm font-medium px-3.5 py-1.5 rounded-lg border bg-white text-ink-500 border-parchment-300 hover:border-amber-500 hover:text-amber-600 transition-colors"
+            >
+              🧠 Book Brain
+            </Link>
+          )}
         </div>
 
+        {tab === "log" && <ReadingLogTab />}
+
+        {(tab === "books" || tab === "wishlist") && (
+          <>
         {/* Search */}
         <div className="mb-4">
           <input
@@ -537,8 +571,11 @@ export default function Library() {
           </div>
         )}
 
+          </>
+        )}
+
         {/* #6 Due for review — interleaved across all books */}
-        {!booksLoading && !q && dueCards.length > 0 && (
+        {tab === "dashboard" && !booksLoading && dueCards.length > 0 && (
           <div className="flex items-center justify-between gap-4 bg-amber-600 text-white rounded-xl px-5 py-4 mb-8">
             <div className="min-w-0">
               <p className="text-sm font-semibold">🎯 {dueCards.length} card{dueCards.length !== 1 ? "s" : ""} due for review</p>
@@ -554,7 +591,7 @@ export default function Library() {
         )}
 
         {/* On this day: notes captured on today's date in a past year */}
-        {!booksLoading && !q && onThisDay.length > 0 && (
+        {tab === "dashboard" && !booksLoading && onThisDay.length > 0 && (
           <div className="bg-white border border-parchment-200 rounded-xl p-5 mb-8">
             <p className="text-xs font-medium text-ink-300 uppercase tracking-wide mb-3">📅 On This Day</p>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-3">
@@ -575,7 +612,7 @@ export default function Library() {
         )}
 
         {/* ── Features 6 / 7 / 8 — three-column info cards ── */}
-        {!booksLoading && !q && (
+        {tab === "dashboard" && !booksLoading && (
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
 
             {/* Feature 6: Random notes */}
@@ -607,39 +644,6 @@ export default function Library() {
                 <div>
                   <span className="text-xs text-ink-300">This year</span>
                   <p className="font-semibold text-ink-900">{totalPagesThisYear.toLocaleString()} pg</p>
-                </div>
-              </div>
-              <div className="space-y-1.5 mb-3">
-                <select
-                  value={logBookId}
-                  onChange={(e) => setLogBookId(e.target.value)}
-                  className="w-full border border-parchment-300 rounded-lg px-3 py-2 text-sm text-ink-900 focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-transparent bg-white"
-                >
-                  <option value="">Select book…</option>
-                  {books.filter((b) => bookStatus(b) !== "wishlist").map((b) => (
-                    <option key={b.id} value={b.id}>{b.title}</option>
-                  ))}
-                </select>
-                <div className="flex gap-1.5">
-                  <input
-                    type="date"
-                    value={logDate}
-                    onChange={(e) => setLogDate(e.target.value)}
-                    className="flex-1 border border-parchment-300 rounded-lg px-2 py-2 text-sm text-ink-900 focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-transparent"
-                  />
-                  <input
-                    type="number"
-                    min="1"
-                    value={logPages}
-                    onChange={(e) => setLogPages(e.target.value)}
-                    placeholder="Pages"
-                    className="w-20 border border-parchment-300 rounded-lg px-2 py-2 text-sm text-ink-900 placeholder-ink-300 focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-transparent"
-                  />
-                  <button
-                    onClick={addReadingLogEntry}
-                    disabled={!logBookId || !logPages || !logDate}
-                    className="bg-amber-600 hover:bg-amber-500 disabled:opacity-40 text-white text-xs font-medium px-3 py-2 rounded-lg transition-colors"
-                  >Add</button>
                 </div>
               </div>
               {last5Entries.length > 0 && (
@@ -683,7 +687,7 @@ export default function Library() {
           </div>
         )}
 
-        {booksLoading ? (
+        {(tab === "books" || tab === "wishlist") && (booksLoading ? (
           <div className="text-center py-24">
             <p className="text-ink-300 text-sm">Loading your library…</p>
           </div>
@@ -694,23 +698,23 @@ export default function Library() {
             </p>
           ) : (
           <div className="text-center py-24">
-            <p className="text-5xl mb-4">{view === "wishlist" ? "🔖" : "📚"}</p>
+            <p className="text-5xl mb-4">{shelf === "wishlist" ? "🔖" : "📚"}</p>
             <p className="text-ink-500 text-lg font-serif italic">
               {search || activeTag
                 ? "No books match your filter."
-                : view === "wishlist"
+                : shelf === "wishlist"
                 ? "Your wishlist is empty."
-                : view === "reading"
+                : shelf === "reading"
                 ? "You're not reading anything right now."
-                : view === "completed"
+                : shelf === "completed"
                 ? "No finished books yet."
                 : "Your library is empty."}
             </p>
             {!search && !activeTag && (
               <p className="text-ink-300 text-sm mt-2">
-                {view === "wishlist"
+                {shelf === "wishlist"
                   ? "Add books you want to read next."
-                  : view === "completed"
+                  : shelf === "completed"
                   ? "Books you finish will show up here."
                   : "Add your first book to get started."}
               </p>
@@ -799,7 +803,7 @@ export default function Library() {
               );
             })}
           </div>
-        )}
+        ))}
       </main>
 
       {/* Import modal */}
