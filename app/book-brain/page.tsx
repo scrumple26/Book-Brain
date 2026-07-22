@@ -48,13 +48,19 @@ export default function BookBrainPage() {
   const [tag, setTag] = useState("");
   const [author, setAuthor] = useState("");
 
+  // Pickers list books alphabetically; the library's own order is by shelf and
+  // recency, which is useless when you are hunting for a title by name.
+  const sortedBooks = useMemo(
+    () => [...books].sort((a, b) => a.title.localeCompare(b.title)),
+    [books],
+  );
   const tags = useMemo(() => libraryTags(books), [books]);
   const authors = useMemo(() => libraryAuthors(books), [books]);
 
   const lens: Lens = useMemo(() => {
     switch (kind) {
       case "book":
-        return { type: "book", bookId: bookId || books[0]?.id || "" };
+        return { type: "book", bookId: bookId || sortedBooks[0]?.id || "" };
       case "tag":
         return { type: "tag", tag: tag || tags[0] || "" };
       case "author":
@@ -62,7 +68,7 @@ export default function BookBrainPage() {
       case "all":
         return { type: "all" };
     }
-  }, [kind, bookId, tag, author, books, tags, authors]);
+  }, [kind, bookId, tag, author, sortedBooks, tags, authors]);
 
   const matches = useMemo(() => resolveLens(lens, books), [lens, books]);
   const size = useMemo(() => lensSize(matches), [matches]);
@@ -115,8 +121,8 @@ export default function BookBrainPage() {
           </div>
 
           {kind === "book" && (
-            <LensSelect value={bookId || books[0]?.id || ""} onChange={setBookId} empty="No books yet">
-              {books.map((b) => (
+            <LensSelect value={bookId || sortedBooks[0]?.id || ""} onChange={setBookId} empty="No books yet">
+              {sortedBooks.map((b) => (
                 <option key={b.id} value={b.id}>{b.title}</option>
               ))}
             </LensSelect>

@@ -357,12 +357,19 @@ export default function Library() {
     (b.quizCards ?? []).filter((c) => isDue(c)).map((card) => ({ bookId: b.id, card }))
   );
 
-  function startDueReview() {
-    // Interleave across books (mix topics) rather than reviewing one deck at a time.
-    setReviewQueue([...dueCards].sort(() => Math.random() - 0.5));
+  /** Open the review overlay on any set of cards, shuffled. Interleaving
+   *  across books beats reviewing one deck at a time, so the shuffle is the
+   *  point rather than a flourish. */
+  function startReview(cards: { bookId: string; card: QuizCard }[]) {
+    if (cards.length === 0) return;
+    setReviewQueue([...cards].sort(() => Math.random() - 0.5));
     setReviewPos(0);
     setReviewShow(false);
     setReviewOpen(true);
+  }
+
+  function startDueReview() {
+    startReview(dueCards);
   }
 
   async function gradeDueCard(grade: Grade) {
@@ -595,7 +602,7 @@ export default function Library() {
           </div>
         )}
 
-        {tab === "quiz" && !booksLoading && <QuizTab />}
+        {tab === "quiz" && !booksLoading && <QuizTab onStartReview={startReview} />}
 
         {/* On this day: notes captured on today's date in a past year */}
         {tab === "dashboard" && !booksLoading && onThisDay.length > 0 && (
