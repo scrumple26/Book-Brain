@@ -3,6 +3,7 @@
 export const dynamic = "force-dynamic";
 
 import { useState, useRef, useEffect } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Book, BookStatus, bookStatus, QuizCard } from "@/lib/types";
 import { generateId } from "@/lib/storage";
@@ -11,6 +12,7 @@ import { Grade, isDue, schedule } from "@/lib/srs";
 import { useAuth } from "@/context/AuthContext";
 import { useBooks } from "@/context/BooksContext";
 import { parseBooks, toBook, countNotes, type ParsedBook } from "@/lib/importBook";
+import { useCapabilities } from "@/lib/useCapabilities";
 
 function SignInScreen({ onSignIn, error }: { onSignIn: () => void; error: string | null }) {
   return (
@@ -93,6 +95,7 @@ function TagInput({ tags, onChange }: { tags: string[]; onChange: (tags: string[
 export default function Library() {
   const router = useRouter();
   const { user, loading, signInError, signIn, signOut } = useAuth();
+  const capabilities = useCapabilities();
   const { books, loading: booksLoading, error: booksError, upsertBook, removeBook } = useBooks();
   const [showForm, setShowForm] = useState(false);
   const [title, setTitle] = useState("");
@@ -393,12 +396,25 @@ export default function Library() {
             <h1 className="text-2xl font-semibold text-ink-900">Book Brain</h1>
           </div>
           <div className="flex items-center gap-3">
-            <div className="flex items-center gap-2">
+            {capabilities.has("hub") && (
+              <Link
+                href="/book-brain"
+                className="flex items-center gap-1.5 border border-parchment-300 text-ink-500 hover:border-amber-500 hover:text-amber-600 text-sm font-medium px-3 py-2 rounded-lg transition-colors"
+                title="Book Brain — AI over your notes"
+              >
+                <span className="text-base leading-none">🧠</span>
+                <span className="hidden sm:inline">Book Brain</span>
+              </Link>
+            )}
+            <Link href="/profile" className="flex items-center gap-2" title="Profile and usage">
               {user.photoURL && (
+                // eslint-disable-next-line @next/next/no-img-element
                 <img src={user.photoURL} alt={user.displayName ?? ""} className="w-8 h-8 rounded-full" />
               )}
-              <span className="text-sm text-ink-500 hidden sm:block">{user.displayName ?? user.email}</span>
-            </div>
+              <span className="text-sm text-ink-500 hidden sm:block hover:text-amber-600 transition-colors">
+                {user.displayName ?? user.email}
+              </span>
+            </Link>
             <button
               onClick={signOut}
               className="text-xs text-ink-300 hover:text-ink-700 border border-parchment-300 px-3 py-1.5 rounded-lg transition-colors"

@@ -26,6 +26,7 @@ export interface QuizCard {
   question: string;
   answer: string;
   sourceNoteId?: string; // if promoted from a note
+  aiGenerated?: boolean;  // drafted by Book Brain and kept during review
   // SM-2-lite spaced-repetition scheduling (all optional — older cards are "due").
   dueDate?: string;       // YYYY-MM-DD; absent = due now
   intervalDays?: number;  // current spacing interval
