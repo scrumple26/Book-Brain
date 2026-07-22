@@ -13,6 +13,7 @@ import { useAuth } from "@/context/AuthContext";
 import { useBooks } from "@/context/BooksContext";
 import { parseBooks, toBook, countNotes, type ParsedBook } from "@/lib/importBook";
 import { useCapabilities } from "@/lib/useCapabilities";
+import { SmartImport } from "@/app/SmartImport";
 
 function SignInScreen({ onSignIn, error }: { onSignIn: () => void; error: string | null }) {
   return (
@@ -115,6 +116,7 @@ export default function Library() {
 
   // Import: paste or upload a Markdown / CSV file → preview → save as books
   const [showImport, setShowImport] = useState(false);
+  const [importMode, setImportMode] = useState<"file" | "smart">("file");
   const [importText, setImportText] = useState("");
   const [importName, setImportName] = useState<string | undefined>(undefined);
   const [importing, setImporting] = useState(false);
@@ -811,6 +813,39 @@ export default function Library() {
             onClick={(e) => e.stopPropagation()}
           >
             <h2 className="font-serif text-xl font-semibold text-ink-900 mb-2">Import notes</h2>
+
+            {capabilities.has("smart-import") && (
+              <div className="flex gap-1.5 mb-4">
+                {([["file", "From a formatted file"], ["smart", "✨ Smart Import"]] as const).map(
+                  ([key, label]) => (
+                    <button
+                      key={key}
+                      onClick={() => setImportMode(key)}
+                      className={`text-xs font-medium px-3 py-1.5 rounded-lg border transition-colors ${
+                        importMode === key
+                          ? "bg-amber-600 border-amber-600 text-white"
+                          : "bg-white border-parchment-300 text-ink-500 hover:border-amber-500 hover:text-amber-600"
+                      }`}
+                    >
+                      {label}
+                    </button>
+                  ),
+                )}
+              </div>
+            )}
+
+            {importMode === "smart" && capabilities.has("smart-import") ? (
+              <>
+                <p className="text-xs text-ink-500 mb-4 leading-relaxed">
+                  For anything that <em>isn&apos;t</em> already in a known format — a chapter, an
+                  article, exported highlights. The AI reads it, may ask a question or two, and
+                  proposes notes for you to confirm. Costs a few cents against the shared AI budget;
+                  the formatted-file option above is free and exact.
+                </p>
+                <SmartImport onDone={resetImport} />
+              </>
+            ) : (
+              <>
             <p className="text-xs text-ink-500 mb-4 leading-relaxed">
               Paste a Markdown or CSV file, or choose one. Markdown: a title line (<code>{"# Title"}</code> or{" "}
               <code>{"**Title By Author**"}</code>), chapter headers (<code>{"## Name"}</code> or{" "}
@@ -883,6 +918,8 @@ export default function Library() {
                 {importing ? "Importing…" : importPreview.length > 1 ? `Import ${importPreview.length} books` : "Import book"}
               </button>
             </div>
+              </>
+            )}
           </div>
         </div>
       )}
