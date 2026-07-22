@@ -45,19 +45,6 @@ Rules:
 - Be concise and concrete. Use the reader's own vocabulary rather than restating their ideas in generic language.`;
 
 /**
- * Persona mode: reason through one book's ideas.
- *
- * The grounding rule is stricter here, not looser. A persona framing actively
- * invites filling gaps from pretrained knowledge of a well-known book — which
- * is the exact failure that would make this feature untrustworthy.
- */
-export const ASK_PERSONA_SUFFIX = `
-
-The reader wants you to reason through this book's ideas — apply its framework, its distinctions, its way of looking at a problem.
-
-This does NOT relax the grounding rule; it tightens it. Use only the ideas present in these notes. Where the notes don't reach far enough to answer in the book's terms, say which part you can't ground rather than inventing what the author would probably say.`;
-
-/**
  * Serialize notes into the cacheable prompt block.
  *
  * Grouped by book then chapter, in the order the lens resolved them. That

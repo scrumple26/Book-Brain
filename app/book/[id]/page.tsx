@@ -9,6 +9,8 @@ import { generateId } from "@/lib/storage";
 import { highlight } from "@/lib/highlight";
 import { Grade, isDue, dueSortKey, schedule, newSchedule } from "@/lib/srs";
 import { useAuth } from "@/context/AuthContext";
+import { useCapabilities } from "@/lib/useCapabilities";
+import { QuizGenerator } from "@/app/BookQuizGenerator";
 import { useBooks } from "@/context/BooksContext";
 import {
   AQUA_MAX_SECONDS_PER_MONTH,
@@ -178,6 +180,7 @@ export default function BookPage() {
   const router = useRouter();
   const { id } = useParams<{ id: string }>();
   const { user, loading: authLoading } = useAuth();
+  const capabilities = useCapabilities();
   const { books, loading: booksLoading, upsertBook } = useBooks();
 
   const [book, setBook] = useState<Book | null>(null);
@@ -203,6 +206,7 @@ export default function BookPage() {
   const [reviewIds, setReviewIds] = useState<string[]>([]); // frozen review queue (card ids)
   const [showAnswer, setShowAnswer] = useState(false);
   const [quizMode, setQuizMode] = useState<"review" | "manage">("review");
+  const [showAiQuiz, setShowAiQuiz] = useState(false);
   const [newQuizQ, setNewQuizQ] = useState("");
   const [newQuizA, setNewQuizA] = useState("");
   const [newQuizSourceId, setNewQuizSourceId] = useState<string | undefined>(undefined);
@@ -1781,6 +1785,20 @@ export default function BookPage() {
                       className="w-full bg-amber-600 hover:bg-amber-500 disabled:opacity-40 disabled:cursor-not-allowed text-white text-sm font-medium py-2 rounded-lg transition-colors"
                     >+ Add card</button>
                   </div>
+                  {capabilities.has("hub") && (
+                    <div className="border-t border-parchment-100 pt-3">
+                      {showAiQuiz ? (
+                        <QuizGenerator bookId={book.id} />
+                      ) : (
+                        <button
+                          onClick={() => setShowAiQuiz(true)}
+                          className="w-full border border-parchment-300 text-ink-500 hover:border-amber-500 hover:text-amber-600 text-sm font-medium py-2 rounded-lg transition-colors"
+                        >
+                          ✨ Draft cards with AI
+                        </button>
+                      )}
+                    </div>
+                  )}
                   {cards.length > 0 && (
                     <ul className="space-y-1.5 border-t border-parchment-100 pt-3">
                       {cards.map((c) => (

@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/context/AuthContext";
@@ -23,11 +23,17 @@ import {
 } from "@/lib/smartImport";
 import { countNotes, toBook, type ParsedBook } from "@/lib/importBook";
 import { estimateCostUsd } from "@/lib/ai";
-import { QUIZ_MAX_OUTPUT_TOKENS, type QuizDraft } from "@/lib/quizPrompt";
-import { generateId } from "@/lib/storage";
-import type { QuizCard } from "@/lib/types";
+import { QUIZ_MAX_OUTPUT_TOKENS } from "@/lib/quizPrompt";
+import { QuizGenerator } from "@/app/BookQuizGenerator";
 
 type LensKind = Lens["type"];
+type HubTab = "ask" | "quiz" | "import";
+
+const TAB_LABELS: Record<HubTab, string> = {
+  ask: "Ask your notes",
+  quiz: "Quiz cards",
+  import: "Smart Import",
+};
 
 const KIND_LABELS: Record<LensKind, string> = {
   book: "A book",
@@ -50,6 +56,7 @@ export default function BookBrainPage() {
   const { books, loading: booksLoading } = useBooks();
   const capabilities = useCapabilities();
 
+  const [tab, setTab] = useState<HubTab>("ask");
   const [kind, setKind] = useState<LensKind>("all");
   const [bookId, setBookId] = useState("");
   const [tag, setTag] = useState("");
@@ -100,6 +107,29 @@ export default function BookBrainPage() {
     <div className="min-h-screen bg-parchment-50">
       <Header />
       <main className="max-w-3xl mx-auto px-6 py-8">
+        <div className="flex flex-wrap gap-1.5 mb-6 border-b border-parchment-300 pb-3">
+          {(Object.keys(TAB_LABELS) as HubTab[])
+            .filter((t) => t !== "import" || capabilities.has("smart-import"))
+            .map((t) => (
+              <button
+                key={t}
+                onClick={() => setTab(t)}
+                className={`text-sm font-medium px-3 py-1.5 rounded-lg transition-colors ${
+                  tab === t
+                    ? "bg-amber-600 text-white"
+                    : "text-ink-500 hover:bg-amber-50 hover:text-amber-600"
+                }`}
+              >
+                {TAB_LABELS[t]}
+              </button>
+            ))}
+        </div>
+
+        {tab === "quiz" && <QuizTab />}
+        {tab === "import" && capabilities.has("smart-import") && <SmartImport />}
+
+        {tab === "ask" && (
+          <>
         <p className="text-ink-500 mb-6">
           Choose a lens — the set of notes a question is allowed to read — then ask.
         </p>
@@ -160,17 +190,7 @@ export default function BookBrainPage() {
         </div>
 
         <Asker lens={lens} matches={matches} disabled={allLocked} />
-
-        {kind === "book" && lens.type === "book" && (
-          <div className="mt-4">
-            <QuizGenerator bookId={lens.bookId} />
-          </div>
-        )}
-
-        {capabilities.has("smart-import") && (
-          <div className="mt-4">
-            <SmartImport />
-          </div>
+          </>
         )}
       </main>
     </div>
@@ -197,7 +217,6 @@ function Asker({
   const { user } = useAuth();
   const capabilities = useCapabilities();
   const [question, setQuestion] = useState("");
-  const [persona, setPersona] = useState(false);
   const [deep, setDeep] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -206,10 +225,6 @@ function Asker({
     citations: AskCitation[];
     cachedTokens: number;
   } | null>(null);
-
-  // A persona only makes sense for one book — "answer in the philosophy of
-  // these forty books" isn't a coherent request.
-  const personaAvailable = lens.type === "book";
 
   async function ask() {
     if (!user || !question.trim()) return;
@@ -224,7 +239,6 @@ function Asker({
         body: JSON.stringify({
           question,
           lensType: lens.type,
-          persona: persona && personaAvailable,
           deep,
           notes: matches.map((m) => ({
             id: m.note.id,
@@ -268,13 +282,6 @@ function Asker({
           {busy ? "Reading…" : "Ask"}
         </button>
 
-        {personaAvailable && (
-          <label className="flex items-center gap-2 text-xs text-ink-500 cursor-pointer">
-            <input type="checkbox" checked={persona} onChange={(e) => setPersona(e.target.checked)} />
-            Answer through this book&apos;s ideas
-          </label>
-        )}
-
         {capabilities.has("deep-answer") && (
           <label className="flex items-center gap-2 text-xs text-ink-500 cursor-pointer">
             <input type="checkbox" checked={deep} onChange={(e) => setDeep(e.target.checked)} />
@@ -287,11 +294,6 @@ function Asker({
 
       {result && (
         <div className="mt-4 border-t border-parchment-200 pt-4">
-          {persona && personaAvailable && (
-            <p className="text-xs text-amber-700 mb-2">
-              Reasoning from your notes on this book — experimental.
-            </p>
-          )}
           <div className="text-sm text-ink-900 whitespace-pre-wrap leading-relaxed">
             {result.answer}
           </div>
@@ -327,170 +329,6 @@ function Asker({
 }
 
 /**
- * Propose-then-review quiz generation.
- *
- * Drafts are NEVER written straight into the book. Every card is edited or
- * discarded by hand before it can enter the review queue — which keeps ten
- * mediocre cards from devaluing every future session, and keeps the act of
- * rephrasing a card (the generation effect) in the loop rather than turning
- * card-making into a passive click.
- */
-function QuizGenerator({ bookId }: { bookId: string }) {
-  const { user } = useAuth();
-  const { books, upsertBook } = useBooks();
-  const book = books.find((b) => b.id === bookId);
-
-  const [status, setStatus] = useState<"idle" | "working" | "saving">("idle");
-  const [error, setError] = useState<string | null>(null);
-  const [drafts, setDrafts] = useState<QuizDraft[] | null>(null);
-  const [kept, setKept] = useState<Set<number>>(new Set());
-  const [saved, setSaved] = useState(0);
-
-  if (!book) return null;
-
-  const sourceNotes = book.chapters
-    .filter((c) => !c.deleted)
-    .flatMap((c) => c.notes.map((n) => ({ id: n.id, chapter: c.name, text: n.text })));
-
-  async function generate() {
-    if (!user || !book) return;
-    setStatus("working");
-    setError(null);
-    setDrafts(null);
-    setSaved(0);
-    try {
-      const token = await user.getIdToken();
-      const res = await fetch("/api/quiz-generate", {
-        method: "POST",
-        headers: { Authorization: `Bearer ${token}`, "content-type": "application/json" },
-        body: JSON.stringify({ title: book.title, author: book.author, notes: sourceNotes }),
-      });
-      const body = await res.json();
-      if (!res.ok) {
-        setError(body?.error ?? `Request failed (${res.status})`);
-        return;
-      }
-      setDrafts(body.cards as QuizDraft[]);
-      setKept(new Set((body.cards as QuizDraft[]).map((_, i) => i)));
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setStatus("idle");
-    }
-  }
-
-  function editDraft(index: number, patch: Partial<QuizDraft>) {
-    setDrafts((prev) => prev?.map((d, i) => (i === index ? { ...d, ...patch } : d)) ?? prev);
-  }
-
-  async function saveKept() {
-    if (!drafts || !book) return;
-    setStatus("saving");
-    const chosen = drafts.filter((_, i) => kept.has(i));
-    const cards: QuizCard[] = chosen.map((d) => ({
-      id: generateId(),
-      question: d.question,
-      answer: d.answer,
-      ...(d.sourceNoteId ? { sourceNoteId: d.sourceNoteId } : {}),
-      aiGenerated: true,
-      // No dueDate: a new card is due immediately, same as a manual one.
-    }));
-    try {
-      await upsertBook({ ...book, quizCards: [...(book.quizCards ?? []), ...cards] });
-      setSaved(cards.length);
-      setDrafts(null);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setStatus("idle");
-    }
-  }
-
-  return (
-    <div className="bg-white border border-parchment-200 rounded-xl p-5">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h2 className="font-serif font-semibold text-ink-900">Generate quiz cards</h2>
-          <p className="text-xs text-ink-300 mt-0.5">
-            Drafts from {sourceNotes.length} note{sourceNotes.length === 1 ? "" : "s"} — you review
-            each one before anything is saved.
-          </p>
-        </div>
-        <button
-          onClick={generate}
-          disabled={status !== "idle" || sourceNotes.length === 0}
-          className="bg-amber-600 hover:bg-amber-500 disabled:opacity-40 text-white text-sm font-medium px-4 py-2 rounded-lg transition-colors"
-        >
-          {status === "working" ? "Thinking…" : "✨ Generate"}
-        </button>
-      </div>
-
-      {error && <p className="text-sm text-red-600 mt-3">{error}</p>}
-      {saved > 0 && (
-        <p className="text-sm text-ink-700 mt-3">
-          Saved {saved} card{saved === 1 ? "" : "s"} to {book.title}. They&apos;re due now.
-        </p>
-      )}
-
-      {drafts && (
-        <div className="mt-4 flex flex-col gap-3">
-          {drafts.map((draft, i) => (
-            <div
-              key={i}
-              className={`border rounded-lg p-3 transition-colors ${
-                kept.has(i) ? "border-parchment-300 bg-parchment-50" : "border-parchment-200 opacity-50"
-              }`}
-            >
-              <input
-                value={draft.question}
-                onChange={(e) => editDraft(i, { question: e.target.value })}
-                className="w-full bg-transparent font-medium text-ink-900 text-sm focus:outline-none"
-                aria-label={`Question ${i + 1}`}
-              />
-              <textarea
-                value={draft.answer}
-                onChange={(e) => editDraft(i, { answer: e.target.value })}
-                rows={2}
-                className="w-full bg-transparent text-sm text-ink-500 mt-1 resize-none focus:outline-none"
-                aria-label={`Answer ${i + 1}`}
-              />
-              <button
-                onClick={() =>
-                  setKept((prev) => {
-                    const next = new Set(prev);
-                    if (next.has(i)) next.delete(i);
-                    else next.add(i);
-                    return next;
-                  })
-                }
-                className="text-xs text-ink-300 hover:text-amber-600 transition-colors"
-              >
-                {kept.has(i) ? "Discard" : "Keep"}
-              </button>
-            </div>
-          ))}
-          <div className="flex items-center gap-3">
-            <button
-              onClick={saveKept}
-              disabled={kept.size === 0 || status === "saving"}
-              className="bg-amber-600 hover:bg-amber-500 disabled:opacity-40 text-white text-sm font-medium px-4 py-2 rounded-lg transition-colors"
-            >
-              {status === "saving" ? "Saving…" : `Save ${kept.size} card${kept.size === 1 ? "" : "s"}`}
-            </button>
-            <button
-              onClick={() => setDrafts(null)}
-              className="text-sm text-ink-500 hover:text-ink-700 transition-colors"
-            >
-              Discard all
-            </button>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-/**
  * Smart Import — a document in, book notes out.
  *
  * The model may ask before committing; answers are replayed on the next round
@@ -502,7 +340,9 @@ function SmartImport() {
   const { upsertBook } = useBooks();
   const router = useRouter();
 
+  const fileRef = useRef<HTMLInputElement>(null);
   const [document, setDocument] = useState("");
+  const [fileName, setFileName] = useState<string | undefined>(undefined);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [round, setRound] = useState(0);
@@ -577,11 +417,37 @@ function SmartImport() {
         a question or two first.
       </p>
 
+      <div className="flex flex-wrap items-center gap-3 mb-2">
+        <button
+          type="button"
+          onClick={() => fileRef.current?.click()}
+          className="border border-parchment-300 text-ink-500 hover:border-amber-500 hover:text-amber-600 text-xs font-medium px-3 py-2 rounded-lg transition-colors"
+        >
+          Choose file (.md / .txt)
+        </button>
+        {fileName && <span className="text-xs text-ink-300 truncate">{fileName}</span>}
+        <input
+          ref={fileRef}
+          type="file"
+          accept=".md,.markdown,.txt,text/markdown,text/plain"
+          className="hidden"
+          onChange={async (e) => {
+            const file = e.target.files?.[0];
+            if (!file) return;
+            setFileName(file.name);
+            setDocument(await file.text());
+            setQuestions(null);
+            setPreview(null);
+            setError(null);
+          }}
+        />
+      </div>
+
       <textarea
         value={document}
-        onChange={(e) => setDocument(e.target.value)}
+        onChange={(e) => { setDocument(e.target.value); setFileName(undefined); }}
         rows={5}
-        placeholder="Paste the document here…"
+        placeholder="Paste the document here, or choose a file…"
         className="w-full border border-parchment-300 rounded-lg px-3 py-2 text-sm text-ink-900 placeholder-ink-300 focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-transparent resize-y"
       />
       <div className="flex flex-wrap items-center gap-3 mt-3">
@@ -702,6 +568,35 @@ function SmartImport() {
         </div>
       )}
     </div>
+  );
+}
+
+/** Quiz generation is per-book, so this tab picks a book rather than a lens. */
+function QuizTab() {
+  const { books } = useBooks();
+  const [bookId, setBookId] = useState("");
+  const selected = bookId || books[0]?.id || "";
+
+  if (books.length === 0) {
+    return (
+      <p className="text-ink-500 text-sm">
+        Add a book first — quiz cards are generated from a book&apos;s own notes.
+      </p>
+    );
+  }
+
+  return (
+    <>
+      <div className="bg-white border border-parchment-200 rounded-xl p-5 mb-4">
+        <label className="block text-sm text-ink-700 mb-2">Book</label>
+        <LensSelect value={selected} onChange={setBookId} empty="No books yet">
+          {books.map((b) => (
+            <option key={b.id} value={b.id}>{b.title}</option>
+          ))}
+        </LensSelect>
+      </div>
+      <QuizGenerator bookId={selected} />
+    </>
   );
 }
 

@@ -14,7 +14,6 @@ import {
   ASK_MAX_INPUT_TOKENS,
   ASK_MAX_NOTES,
   ASK_MAX_OUTPUT_TOKENS,
-  ASK_PERSONA_SUFFIX,
   ASK_SYSTEM_PROMPT,
   parseAnswer,
   serializeAskNotes,
@@ -57,7 +56,6 @@ export async function POST(req: NextRequest) {
   const question = typeof body?.question === "string" ? body.question.trim() : "";
   const notes = parseNotes(body?.notes);
   const lensType = typeof body?.lensType === "string" ? body.lensType : "";
-  const persona = body?.persona === true;
   const wantsDeep = body?.deep === true;
 
   if (!question) return NextResponse.json({ error: "Ask a question first" }, { status: 400 });
@@ -79,7 +77,7 @@ export async function POST(req: NextRequest) {
   }
 
   const deep = wantsDeep && capabilities.has("deep-answer");
-  const system = ASK_SYSTEM_PROMPT + (persona ? ASK_PERSONA_SUFFIX : "");
+  const system = ASK_SYSTEM_PROMPT;
   const notesBlock = serializeAskNotes(notes);
 
   const inputTokens = approxTokens(system) + approxTokens(notesBlock) + approxTokens(question);
