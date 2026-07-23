@@ -6,6 +6,7 @@ import { useAuth } from "@/context/AuthContext";
 import { useBooks } from "@/context/BooksContext";
 import {
   SMART_IMPORT_MAX_CHARS,
+  SMART_IMPORT_MAX_INSTRUCTIONS,
   type SmartImportAnswer,
   type SmartImportQuestion,
 } from "@/lib/smartImport";
@@ -28,6 +29,7 @@ export function SmartImport({ onDone }: { onDone?: () => void } = {}) {
   const fileRef = useRef<HTMLInputElement>(null);
   const [document, setDocument] = useState("");
   const [fileName, setFileName] = useState<string | undefined>(undefined);
+  const [instructions, setInstructions] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [round, setRound] = useState(0);
@@ -46,7 +48,7 @@ export function SmartImport({ onDone }: { onDone?: () => void } = {}) {
       const res = await fetch("/api/smart-import", {
         method: "POST",
         headers: { Authorization: `Bearer ${token}`, "content-type": "application/json" },
-        body: JSON.stringify({ document, answers, round: nextRound }),
+        body: JSON.stringify({ document, answers, round: nextRound, instructions }),
       });
       const parsed = await readJson<{
         status: "questions" | "parsed";
@@ -139,6 +141,18 @@ export function SmartImport({ onDone }: { onDone?: () => void } = {}) {
         onChange={(e) => { setDocument(e.target.value); setFileName(undefined); }}
         rows={5}
         placeholder="Paste the document here, or choose a file…"
+        className="w-full border border-parchment-300 rounded-lg px-3 py-2 text-sm text-ink-900 placeholder-ink-300 focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-transparent resize-y"
+      />
+
+      <label className="block text-xs font-medium text-ink-500 mt-3 mb-1">
+        Instructions <span className="font-normal text-ink-300">— optional</span>
+      </label>
+      <textarea
+        value={instructions}
+        onChange={(e) => setInstructions(e.target.value)}
+        rows={2}
+        maxLength={SMART_IMPORT_MAX_INSTRUCTIONS}
+        placeholder="e.g. Treat each 'Part' as one chapter · keep quotes as their own notes · this is technical, keep detail"
         className="w-full border border-parchment-300 rounded-lg px-3 py-2 text-sm text-ink-900 placeholder-ink-300 focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-transparent resize-y"
       />
       <div className="flex flex-wrap items-center gap-3 mt-3">

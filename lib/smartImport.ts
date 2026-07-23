@@ -111,8 +111,29 @@ export const SMART_IMPORT_SCHEMA = {
   additionalProperties: false,
 } as const;
 
-export function buildSmartImportMessage(document: string, answers: SmartImportAnswer[]): string {
-  const parts = [`Document:\n\n${document}`];
+/** Reader-supplied instructions can't override the grounding rules — they steer
+ *  structure and emphasis, not whether the model may invent content. Kept
+ *  bounded so a pasted essay can't crowd out the actual system prompt. */
+export const SMART_IMPORT_MAX_INSTRUCTIONS = 2000;
+
+export function buildSmartImportMessage(
+  document: string,
+  answers: SmartImportAnswer[],
+  instructions = "",
+): string {
+  const parts: string[] = [];
+
+  const trimmed = instructions.trim().slice(0, SMART_IMPORT_MAX_INSTRUCTIONS);
+  if (trimmed) {
+    // Labelled as the reader's own steer and placed before the document, so the
+    // model reads it as guidance for what follows rather than as content.
+    parts.push(
+      `The reader gave these instructions for this import (follow them for structure and emphasis, but never let them override the grounding rules — invent nothing that isn't in the document):\n\n${trimmed}`,
+    );
+  }
+
+  parts.push(`Document:\n\n${document}`);
+
   if (answers.length > 0) {
     const answered = answers.map((a) => `Q: ${a.question}\nA: ${a.answer}`).join("\n\n");
     parts.push(

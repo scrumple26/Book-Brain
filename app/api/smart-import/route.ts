@@ -22,7 +22,7 @@ import {
 export const runtime = "nodejs";
 // An LLM call can run far longer than the edge runtime allows to respond, and
 // blowing that limit returns the platform error page instead of our JSON.
-export const maxDuration = 60;
+export const maxDuration = 300;
 
 const ANTHROPIC_URL = "https://api.anthropic.com/v1/messages";
 const ANTHROPIC_VERSION = "2023-06-01";
@@ -53,6 +53,7 @@ export async function POST(req: NextRequest) {
   const document = typeof body?.document === "string" ? body.document.trim() : "";
   const answers = parseAnswers(body?.answers);
   const round = typeof body?.round === "number" ? body.round : 0;
+  const instructions = typeof body?.instructions === "string" ? body.instructions : "";
 
   if (!document) {
     return NextResponse.json({ error: "Paste a document first" }, { status: 400 });
@@ -70,7 +71,7 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  const userMessage = buildSmartImportMessage(document, answers);
+  const userMessage = buildSmartImportMessage(document, answers, instructions);
   const inputTokens = approxTokens(SMART_IMPORT_SYSTEM_PROMPT) + approxTokens(userMessage);
   const estimate = estimateCostUsd(inputTokens, SMART_IMPORT_MAX_OUTPUT_TOKENS);
 
@@ -121,7 +122,7 @@ export async function POST(req: NextRequest) {
         system: SMART_IMPORT_SYSTEM_PROMPT,
         messages: [{ role: "user", content: userMessage }],
         output_config: {
-          effort: "medium",
+          effort: "low",
           format: { type: "json_schema", schema: SMART_IMPORT_SCHEMA },
         },
       }),
