@@ -18,11 +18,13 @@ export interface QuizDraft {
   sourceNoteId?: string;
 }
 
-/** One click must not be able to flood the review queue. */
-export const QUIZ_MAX_CARDS = 10;
+/** Target batch size. The review UI keeps every card opt-in, so a full set is
+ *  something you prune, not something that floods the queue. */
+export const QUIZ_MAX_CARDS = 25;
 /** Hard bound on how much of a book one request may carry, to bound cost. */
 export const QUIZ_MAX_NOTES = 400;
-export const QUIZ_MAX_OUTPUT_TOKENS = 2000;
+/** Room for ~25 question/answer pairs plus the JSON envelope. */
+export const QUIZ_MAX_OUTPUT_TOKENS = 4000;
 
 /**
  * The quality instruction is the whole feature. A model handed a pile of
@@ -39,10 +41,9 @@ Rules:
 - Use the reader's own framing and vocabulary where they had one. These are their notes, not a textbook summary.
 - One idea per card. If a note holds two ideas, prefer the more useful one over cramming both in.
 - Questions are answerable from memory in a sentence or two. Answers are complete but tight.
-- Skip notes too thin to test — fewer strong cards beats padding to a target count.
 - Set sourceNoteId to the id of the note a card came from, when it comes from a single note.
 
-Produce at most ${QUIZ_MAX_CARDS} cards.`;
+Aim for ${QUIZ_MAX_CARDS} cards. Cover the notes broadly rather than clustering on one chapter. If — and only if — the notes are genuinely too thin to yield that many distinct, idea-testing cards, produce fewer rather than padding with trivia or near-duplicates; the reader would rather prune 20 strong cards than sift 25 weak ones.`;
 
 /** Structured-output schema. Note the absence of array length constraints —
  *  the API's structured outputs don't support them, so the count is enforced
